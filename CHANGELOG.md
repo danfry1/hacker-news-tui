@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-14
+
+### Added
+
+- `--version`/`-V` and `--help`/`-h` command-line flags.
+- A Nix flake (`nix run`, `nix profile install`) and a Homebrew tap formula
+  (`brew install danfry1/tap/hacker-news-tui`) for installation.
+
+### Changed
+
+- Releases no longer ship a prebuilt `x86_64-apple-darwin` (Intel macOS) binary;
+  Intel-Mac users can install via `cargo install hacker-news-tui`.
+
 ## [0.1.0] - 2026-06-14
 
 Initial release: a terminal UI for browsing Hacker News, built with Ratatui.
@@ -40,5 +53,6 @@ Initial release: a terminal UI for browsing Hacker News, built with Ratatui.
 - Persisted state lives in the platform data directory
   (`~/Library/Application Support/hacker-news-tui/state.json` on macOS).
 
-[Unreleased]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/danfry1/hacker-news-tui/releases/tag/v0.1.0

@@ -14,8 +14,35 @@ use tokio::sync::mpsc;
 
 use app::App;
 
+const HELP: &str = "\
+hacker-news-tui — a delightful terminal UI for browsing Hacker News
+
+USAGE:
+    hacker-news-tui
+
+OPTIONS:
+    -h, --help       Print this help and exit
+    -V, --version    Print version and exit
+
+Once running, press ? for the in-app keyboard shortcuts.";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Handle the standard CLI flags before taking over the terminal.
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "-V" | "--version" => {
+                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "-h" | "--help" => {
+                println!("{HELP}");
+                return Ok(());
+            }
+            _ => {} // unknown args are ignored; the TUI takes over
+        }
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(concat!(
             env!("CARGO_PKG_NAME"),

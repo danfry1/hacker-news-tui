@@ -35,7 +35,20 @@ The first build compiles dependencies; subsequent runs are instant.
 
 ## Installing
 
-Install from [crates.io](https://crates.io/crates/hacker-news-tui):
+**Homebrew** (macOS / Linux):
+
+```sh
+brew install danfry1/tap/hacker-news-tui
+```
+
+**Nix** (flakes):
+
+```sh
+nix run github:danfry1/hacker-news-tui          # run without installing
+nix profile install github:danfry1/hacker-news-tui
+```
+
+**Cargo** — from [crates.io](https://crates.io/crates/hacker-news-tui):
 
 ```sh
 cargo install hacker-news-tui
