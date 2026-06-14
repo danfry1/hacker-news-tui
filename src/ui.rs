@@ -251,14 +251,7 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let body = chunks[1];
     match &app.comments {
-        Load::Loading => {
-            return draw_center(
-                frame,
-                body,
-                &format!("{} loading discussion…", spinner(app)),
-                ORANGE,
-            );
-        }
+        Load::Loading => return draw_comment_skeleton(frame, body, app),
         Load::Failed(e) => return draw_center(frame, body, e, Color::Red),
         Load::Ready(c) if c.is_empty() => {
             return draw_center(frame, body, "no comments yet — be the first on HN", DIM);
@@ -376,6 +369,80 @@ fn story_header_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         }
     }
     lines
+}
+
+/// An animated placeholder shown while a discussion is being fetched: a banner
+/// with the spinner plus comment-shaped bars that shimmer as `app.spinner` ticks,
+/// making it obvious that content is on the way.
+fn draw_comment_skeleton(frame: &mut Frame, area: Rect, app: &App) {
+    // Three greys; a per-row offset driven by the spinner creates a moving wave.
+    const SHADES: [Color; 3] = [
+        Color::Rgb(48, 50, 56),
+        Color::Rgb(70, 72, 80),
+        Color::Rgb(96, 98, 108),
+    ];
+    let shade = |n: usize| SHADES[(n + app.spinner) % SHADES.len()];
+
+    let body_w = area.width.saturating_sub(2) as usize;
+    let bar = |cols: usize, color: Color| {
+        Span::styled("█".repeat(cols.max(1)), Style::default().fg(color))
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!(" {} ", spinner(app)), Style::default().fg(ORANGE)),
+            Span::styled(
+                "loading discussion…",
+                Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    // (indent depth, first text-line width fraction, second fraction (0 = none)).
+    let rows: [(usize, f32, f32); 8] = [
+        (0, 0.72, 0.42),
+        (1, 0.60, 0.30),
+        (1, 0.50, 0.0),
+        (0, 0.78, 0.50),
+        (1, 0.58, 0.26),
+        (2, 0.46, 0.34),
+        (0, 0.70, 0.44),
+        (1, 0.55, 0.0),
+    ];
+
+    for (i, (depth, f1, f2)) in rows.iter().enumerate() {
+        if lines.len() as u16 + 1 >= area.height {
+            break;
+        }
+        let indent = "│ ".repeat(*depth);
+        let avail = body_w.saturating_sub(depth * 2);
+        let indent_span = || Span::styled(indent.clone(), Style::default().fg(FAINT));
+
+        // author + timestamp bars
+        lines.push(Line::from(vec![
+            indent_span(),
+            bar(10, shade(i + 1)),
+            Span::raw("  "),
+            bar(5, shade(i)),
+        ]));
+        lines.push(Line::from(vec![
+            indent_span(),
+            bar((avail as f32 * f1) as usize, shade(i)),
+        ]));
+        if *f2 > 0.0 {
+            lines.push(Line::from(vec![
+                indent_span(),
+                bar((avail as f32 * f2) as usize, shade(i + 2)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::default().padding(Padding::horizontal(1))),
+        area,
+    );
 }
 
 fn thread_color(depth: usize) -> Color {
