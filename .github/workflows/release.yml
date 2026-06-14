@@ -13,8 +13,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  # Create the GitHub Release once, up front, so the matrix uploads have a
+  # release to attach to (the upload action does not create one itself).
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  upload:
     name: ${{ matrix.target }}
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
