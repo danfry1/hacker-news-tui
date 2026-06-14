@@ -3,14 +3,7 @@
 A fast, delightful terminal UI for browsing [Hacker News](https://news.ycombinator.com),
 built with [Ratatui](https://ratatui.rs).
 
-```
- Y  Hacker News   1·Top  2·New  3·Best  4·Ask  5·Show  6·Jobs        ● live
-▌ 1. The most amazing thing on the internet today  (example.com)
-     ▲ 412  by patio11  · 3h ago  · 💬 198
-  2. Show HN: I built a thing over the weekend  (github.com)
-     ▲ 256  by tptacek   · 5h ago  · 💬 87
- j/k move  enter comments  o open  tab feed  r refresh  ? help  q quit
-```
+![hacker-news-tui demo](https://raw.githubusercontent.com/danfry1/hacker-news-tui/main/demo/hacker-news-tui.gif)
 
 ## Features
 
