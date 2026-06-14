@@ -40,5 +40,5 @@ Initial release: a terminal UI for browsing Hacker News, built with Ratatui.
 - Persisted state lives in the platform data directory
   (`~/Library/Application Support/hacker-news-tui/state.json` on macOS).
 
-[Unreleased]: https://github.com/danielfry/hacker-news-tui/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/danielfry/hacker-news-tui/releases/tag/v0.1.0
+[Unreleased]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/danfry1/hacker-news-tui/releases/tag/v0.1.0
