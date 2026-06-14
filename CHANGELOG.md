@@ -1,0 +1,44 @@
+# Changelog
+
+All notable changes to this project are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-06-14
+
+Initial release: a terminal UI for browsing Hacker News, built with Ratatui.
+
+### Added
+
+- Browse six feeds — Top, New, Best, Ask, Show, and Jobs — switchable with
+  `tab`/`shift+tab` or number keys `1`–`6`.
+- Threaded comment view with colored depth guides, collapsible subtrees, and an
+  `OP` badge marking the original poster.
+- Infinite scroll: the next batch of stories loads and appends automatically as
+  the selection nears the end of the list.
+- Bookmarks: save stories with `s` and revisit them in a dedicated `★ Saved`
+  view (`b`); saved stories are marked with a star in every list.
+- In-app settings pane (`,`) to opt in to remembering read-state and bookmarks
+  across runs. Persistence is off by default; nothing is written to disk unless
+  enabled, and disabling it removes the state file.
+- Read-state tracking that dims already-visited stories.
+- Open the article or discussion in the system browser with `o`.
+- Help overlay (`?`), a context-sensitive footer, a loading spinner, and
+  transient status toasts.
+- HTML cleanup for comment and self-post text: entities are decoded, tags are
+  stripped, and content is word-wrapped to the terminal width.
+
+### Notes
+
+- Asynchronous, non-blocking UI: feeds and whole comment trees are fetched
+  concurrently while the interface stays responsive; stale responses are
+  discarded via per-request generation counters.
+- TLS is provided by `rustls` (no system OpenSSL dependency), and `Cargo.lock`
+  is committed to pin every transitive dependency to an exact version.
+- Persisted state lives in the platform data directory
+  (`~/Library/Application Support/hacker-news-tui/state.json` on macOS).
+
+[Unreleased]: https://github.com/danielfry/hacker-news-tui/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/danielfry/hacker-news-tui/releases/tag/v0.1.0
