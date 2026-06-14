@@ -5,6 +5,13 @@ edition = "2024"
 rust-version = "1.85"
 description = "A delightful terminal UI for browsing Hacker News"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/danfry1/hacker-news-tui"
+homepage = "https://github.com/danfry1/hacker-news-tui"
+keywords = ["hacker-news", "tui", "terminal", "ratatui", "cli"]
+categories = ["command-line-utilities"]
+# Keep the published crate lean — the demo GIF and CI config aren't needed to build.
+exclude = ["demo/", ".github/", "CHANGELOG.md"]
 
 # Supply-chain notes:
 # - Direct dependencies are pinned to a minor series; `Cargo.lock` (committed) locks
