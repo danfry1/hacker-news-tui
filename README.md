@@ -35,18 +35,21 @@ The first build compiles dependencies; subsequent runs are instant.
 
 ## Installing
 
-Build and install from source:
+Install from [crates.io](https://crates.io/crates/hacker-news-tui):
 
 ```sh
-cargo install --path .
+cargo install hacker-news-tui
 ```
 
 Or grab a prebuilt binary from the [Releases](../../releases) page — each tagged
 release ships archives (with SHA-256 checksums) for:
 
 - Linux: `x86_64` and `aarch64`
-- macOS: `x86_64` (Intel) and `aarch64` (Apple Silicon)
+- macOS: `aarch64` (Apple Silicon)
 - Windows: `x86_64`
+
+Intel Macs aren't shipped as a prebuilt binary; install with
+`cargo install hacker-news-tui` instead.
 
 Maintainers cut a release by pushing a version tag:
 
