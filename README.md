@@ -51,6 +51,13 @@ release ships archives (with SHA-256 checksums) for:
 Intel Macs aren't shipped as a prebuilt binary; install with
 `cargo install hacker-news-tui` instead.
 
+The installed command is `hacker-news-tui`. For something shorter, add an alias
+to your shell config (`~/.zshrc`, `~/.bashrc`, …):
+
+```sh
+alias hnt='hacker-news-tui'
+```
+
 Maintainers cut a release by pushing a version tag:
 
 ```sh
