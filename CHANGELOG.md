@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-15
+
+### Changed
+
+- Lower idle CPU usage: the UI now redraws only in response to input or while
+  something is actively loading or animating, rather than on a fixed timer.
+- Comment threads load more politely. Item fetches are now capped at a bounded
+  number of concurrent requests instead of fanning out all at once, which keeps
+  large discussions responsive without flooding the Hacker News API.
+
 ## [0.1.2] - 2026-06-15
 
 ### Changed
