@@ -266,7 +266,6 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = visible
         .iter()
         .map(|flat| {
-            let c = flat.comment;
             let indent = "│ ".repeat(flat.depth);
             let bar = Style::default().fg(thread_color(flat.depth));
 
@@ -275,7 +274,7 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "• "
             };
-            let is_op = c.by == op && !op.is_empty();
+            let is_op = flat.by == op && !op.is_empty();
 
             let mut head = vec![
                 Span::styled(indent.clone(), bar),
@@ -284,7 +283,7 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(if flat.collapsed { ORANGE } else { DIM }),
                 ),
                 Span::styled(
-                    c.by.clone(),
+                    flat.by.clone(),
                     Style::default()
                         .fg(if is_op { ORANGE } else { ACCENT })
                         .add_modifier(Modifier::BOLD),
@@ -294,12 +293,12 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
                 head.push(Span::styled(" OP", Style::default().fg(ORANGE)));
             }
             head.push(Span::styled(
-                format!("  {}", util::time_ago(c.time)),
+                format!("  {}", util::time_ago(flat.time)),
                 Style::default().fg(FAINT),
             ));
             if flat.collapsed {
                 head.push(Span::styled(
-                    format!("  [+{} hidden]", c.descendant_count()),
+                    format!("  [+{} hidden]", flat.hidden),
                     Style::default().fg(DIM),
                 ));
             }
@@ -307,7 +306,7 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
             let mut lines = vec![Line::from(head)];
             if !flat.collapsed {
                 let body_width = text_width.saturating_sub(flat.depth * 2);
-                for wl in util::wrap(&c.text, body_width) {
+                for wl in util::wrap(&flat.text, body_width) {
                     lines.push(Line::from(vec![
                         Span::styled(indent.clone(), bar),
                         Span::raw(wl),

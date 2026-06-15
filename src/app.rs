@@ -82,6 +82,10 @@ pub struct App {
     pub comments: Load<Vec<Comment>>,
     pub comment_state: ListState,
     pub collapsed: HashSet<u64>,
+    /// Flattened, depth-annotated comment rows honoring collapsed subtrees.
+    /// Materialized once whenever `comments` or `collapsed` changes, so drawing
+    /// and navigation are cheap reads rather than a per-keystroke re-flatten.
+    visible: Vec<FlatComment>,
     comment_gen: u64,
     comments_origin: View,
 
@@ -128,6 +132,7 @@ impl App {
             comments: Load::Loading,
             comment_state: ListState::default(),
             collapsed: HashSet::new(),
+            visible: Vec::new(),
             comment_gen: 0,
             comments_origin: View::List,
             visited: HashSet::new(),
@@ -159,13 +164,19 @@ impl App {
         self.dirty = false;
     }
 
-    /// Flattened, depth-annotated view of the comment tree honoring collapsed nodes.
-    pub fn visible_comments(&self) -> Vec<FlatComment<'_>> {
+    /// The cached flattened comment rows (see [`App::visible`]).
+    pub fn visible_comments(&self) -> &[FlatComment] {
+        &self.visible
+    }
+
+    /// Recompute the cached flattened view. Call after any change to the comment
+    /// tree or the collapsed set.
+    fn rebuild_visible(&mut self) {
         let mut out = Vec::new();
         if let Load::Ready(roots) = &self.comments {
             flatten(roots, &self.collapsed, 0, &mut out);
         }
-        out
+        self.visible = out;
     }
 
     // ── async loads ────────────────────────────────────────────────────────
@@ -221,6 +232,7 @@ impl App {
         let seq = self.comment_gen;
         self.comments = Load::Loading;
         self.collapsed.clear();
+        self.rebuild_visible();
         self.comment_state.select(Some(0));
         self.view = View::Comments;
 
@@ -254,6 +266,7 @@ impl App {
             Msg::Comments { seq, result } if seq == self.comment_gen => {
                 self.comment_state.select((!result.is_empty()).then_some(0));
                 self.comments = Load::Ready(result);
+                self.rebuild_visible();
             }
             _ => {} // stale generation — ignore
         }
@@ -365,7 +378,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.move_comments(-1),
             KeyCode::Char('g') | KeyCode::Home => self.comment_state.select(Some(0)),
             KeyCode::Char('G') | KeyCode::End => {
-                let n = self.visible_comments().len();
+                let n = self.visible.len();
                 self.comment_state.select(n.checked_sub(1));
             }
             KeyCode::PageDown => self.move_comments(10),
@@ -438,7 +451,7 @@ impl App {
     }
 
     fn move_comments(&mut self, delta: isize) {
-        let len = self.visible_comments().len();
+        let len = self.visible.len();
         if len == 0 {
             return;
         }
@@ -448,18 +461,22 @@ impl App {
     }
 
     fn toggle_collapse(&mut self) {
-        let visible = self.visible_comments();
         let Some(sel) = self.comment_state.selected() else {
             return;
         };
-        let Some(flat) = visible.get(sel) else { return };
+        let Some(flat) = self.visible.get(sel) else {
+            return;
+        };
         if !flat.has_children {
             return;
         }
-        let id = flat.comment.id;
+        let id = flat.id;
         if !self.collapsed.remove(&id) {
             self.collapsed.insert(id);
         }
+        // Collapsing only hides rows below the selected node, so the selection
+        // stays in range; just refresh the materialized view.
+        self.rebuild_visible();
     }
 
     // ── bookmarks ─────────────────────────────────────────────────────────────
@@ -553,29 +570,51 @@ impl App {
             || self.loading_more
             || (self.view == View::Comments && matches!(self.comments, Load::Loading))
     }
+
+    /// Whether anything on screen is animating and so needs periodic ticks: the
+    /// loading spinner, or a toast counting down to expiry. When false, the event
+    /// loop can idle on input alone instead of redrawing several times a second.
+    pub fn is_animating(&self) -> bool {
+        self.is_loading() || self.toast.is_some()
+    }
 }
 
-/// A comment positioned within the flattened display list.
-pub struct FlatComment<'a> {
-    pub comment: &'a Comment,
+/// A comment row materialized for display: the depth-annotated, flattened view
+/// of the tree with collapsed subtrees omitted. Owns its display data so the
+/// cache ([`App::visible`]) is self-contained.
+pub struct FlatComment {
+    pub id: u64,
+    pub by: String,
+    pub time: u64,
+    pub text: String,
     pub depth: usize,
     pub collapsed: bool,
     pub has_children: bool,
+    /// Descendants hidden beneath this node when it is collapsed (for the badge).
+    pub hidden: usize,
 }
 
-fn flatten<'a>(
-    list: &'a [Comment],
-    collapsed: &HashSet<u64>,
-    depth: usize,
-    out: &mut Vec<FlatComment<'a>>,
-) {
+fn flatten(list: &[Comment], collapsed: &HashSet<u64>, depth: usize, out: &mut Vec<FlatComment>) {
     for c in list {
         let is_collapsed = collapsed.contains(&c.id);
         out.push(FlatComment {
-            comment: c,
+            id: c.id,
+            by: c.by.clone(),
+            time: c.time,
+            // A collapsed node's body is not rendered, so don't bother cloning it.
+            text: if is_collapsed {
+                String::new()
+            } else {
+                c.text.clone()
+            },
             depth,
             collapsed: is_collapsed,
             has_children: !c.children.is_empty(),
+            hidden: if is_collapsed {
+                c.descendant_count()
+            } else {
+                0
+            },
         });
         if !is_collapsed {
             flatten(&c.children, collapsed, depth + 1, out);
@@ -866,6 +905,69 @@ mod tests {
         app.on_key(ch(' '));
         assert_eq!(app.visible_comments().len(), 1);
         assert!(app.collapsed.is_empty());
+    }
+
+    #[test]
+    fn flattened_rows_carry_depth_author_text_and_child_flags() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(key(KeyCode::Enter));
+        let seq = app.comment_gen;
+        let tree = vec![
+            Comment {
+                children: vec![leaf(2), leaf(3)],
+                ..leaf(1)
+            },
+            leaf(4),
+        ];
+        app.on_msg(Msg::Comments { seq, result: tree });
+
+        let v = app.visible_comments();
+        assert_eq!(v.len(), 4);
+        // Root node: depth 0, has children, author/text materialized.
+        assert_eq!(v[0].id, 1);
+        assert_eq!(v[0].depth, 0);
+        assert!(v[0].has_children);
+        assert!(!v[0].collapsed);
+        assert_eq!(v[0].by, "bob");
+        assert_eq!(v[0].text, "text");
+        // Reply sits one level deeper and is a leaf.
+        assert_eq!(v[1].id, 2);
+        assert_eq!(v[1].depth, 1);
+        assert!(!v[1].has_children);
+        // Sibling of the root is back at depth 0.
+        assert_eq!(v[3].id, 4);
+        assert_eq!(v[3].depth, 0);
+    }
+
+    #[test]
+    fn collapsing_marks_row_counts_hidden_and_drops_body() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(key(KeyCode::Enter));
+        let seq = app.comment_gen;
+        let tree = vec![Comment {
+            children: vec![leaf(2), leaf(3)],
+            ..leaf(1)
+        }];
+        app.on_msg(Msg::Comments { seq, result: tree });
+        app.comment_state.select(Some(0));
+        app.on_key(ch(' ')); // collapse node 1
+
+        let v = app.visible_comments();
+        assert_eq!(v.len(), 1);
+        assert!(v[0].collapsed);
+        assert_eq!(v[0].hidden, 2); // both descendants hidden
+        assert!(v[0].text.is_empty()); // collapsed body is not materialized
+    }
+
+    #[test]
+    fn is_animating_tracks_toasts() {
+        let (mut app, _rx) = loaded(40);
+        assert!(!app.is_animating()); // idle: stories ready, no toast
+        app.on_key(ch('s')); // bookmark → sets a toast, no load
+        assert!(app.is_animating());
+        app.toast = Some(("x".into(), Instant::now() - Duration::from_secs(1)));
+        app.tick(); // expires the toast
+        assert!(!app.is_animating());
     }
 
     #[test]
