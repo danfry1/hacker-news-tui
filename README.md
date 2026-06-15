@@ -41,6 +41,13 @@ The first build compiles dependencies; subsequent runs are instant.
 brew install danfry1/tap/hacker-news-tui
 ```
 
+**Scoop** (Windows):
+
+```powershell
+scoop bucket add danfry1 https://github.com/danfry1/scoop-bucket
+scoop install hacker-news-tui
+```
+
 **Nix** (flakes):
 
 ```sh
