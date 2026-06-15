@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-15
+
+### Changed
+
+- TLS now trusts the operating system's certificate store (via reqwest's
+  `rustls-tls-native-roots` feature) instead of only the bundled Mozilla root
+  set. This lets the app connect from behind corporate proxies that present a
+  privately-issued root CA, while remaining transparent for everyone else.
+
 ## [0.1.1] - 2026-06-14
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "hacker-news-tui"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.85"
 description = "A delightful terminal UI for browsing Hacker News"
@@ -16,14 +16,15 @@ exclude = ["demo/", ".github/", "CHANGELOG.md"]
 # Supply-chain notes:
 # - Direct dependencies are pinned to a minor series; `Cargo.lock` (committed) locks
 #   every transitive crate to an exact version + checksum for reproducible builds.
-# - TLS is pure-Rust `rustls` (no system OpenSSL linkage / native-tls).
+# - TLS is pure-Rust `rustls` (no system OpenSSL linkage / native-tls). The OS
+#   trust store is used for roots, so privately-issued corporate proxy CAs work.
 # - Dependency surface is kept deliberately small — no `open`/`html-escape`; those
 #   are a few lines of std in `src/util.rs` instead.
 [dependencies]
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }

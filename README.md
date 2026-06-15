@@ -134,7 +134,9 @@ This project is built with a deliberately small, auditable dependency surface:
 
 - **`Cargo.lock` is committed**, pinning every transitive crate to an exact
   version and checksum for reproducible builds.
-- **Pure-Rust TLS** via `rustls` — no linkage to a system OpenSSL.
+- **Pure-Rust TLS** via `rustls` — no linkage to a system OpenSSL. Root
+  certificates come from the OS trust store, so the app works behind corporate
+  proxies that present a privately-issued root CA.
 - **No avoidable dependencies** — browser opening and HTML decoding are a few
   lines of `std` in `src/util.rs` rather than extra crates.
 
