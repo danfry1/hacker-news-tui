@@ -80,7 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => break Ok(()),        // input stream closed
             },
             Some(msg) = rx.recv() => app.on_msg(msg),
-            _ = ticker.tick() => app.tick(),
+            // Only animate (and thus redraw) while something is in motion; when
+            // idle, this arm is disabled and the loop blocks on input alone.
+            _ = ticker.tick(), if app.is_animating() => app.tick(),
         }
 
         // Flush persistent state whenever it changes (deliberate actions only).

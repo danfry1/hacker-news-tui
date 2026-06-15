@@ -1,10 +1,17 @@
 //! Hacker News Firebase API client.
 
 use futures::future::{BoxFuture, FutureExt, join_all};
+use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Semaphore;
 
 pub const BASE: &str = "https://hacker-news.firebaseio.com/v0";
+
+/// Cap on in-flight item requests. The HN Firebase API has no batch endpoint, so
+/// a feed page or a comment thread is many single-item fetches; bounding how many
+/// run at once keeps the connection pool sane and is polite to the API.
+const MAX_CONCURRENT: usize = 16;
 
 pub type Client = reqwest::Client;
 
@@ -150,22 +157,38 @@ pub async fn fetch_item(client: &Client, id: u64) -> Result<Option<Item>, String
         .map_err(|e| e.to_string())
 }
 
-/// Fetch a batch of items by id concurrently, preserving order and dropping
-/// any that are missing, dead, or deleted.
+/// Fetch a batch of items by id, at most [`MAX_CONCURRENT`] at a time, preserving
+/// order and dropping any that are missing, dead, or deleted.
 pub async fn fetch_items(client: Client, ids: Vec<u64>) -> Vec<Item> {
-    let items = join_all(ids.iter().map(|&id| fetch_item(&client, id))).await;
-    items
+    let fetched: Vec<_> = futures::stream::iter(ids)
+        .map(|id| fetch_item(&client, id))
+        .buffered(MAX_CONCURRENT) // ordered, ≤ MAX_CONCURRENT in flight
+        .collect()
+        .await;
+    fetched
         .into_iter()
         .filter_map(|r| r.ok().flatten())
         .filter(|it| !it.deleted && !it.dead)
         .collect()
 }
 
+/// Fetch an item while holding a concurrency permit, so the shared semaphore
+/// bounds the total number of simultaneous requests across the whole forest.
+async fn fetch_item_limited(
+    client: &Client,
+    sem: &Semaphore,
+    id: u64,
+) -> Result<Option<Item>, String> {
+    let _permit = sem.acquire().await.ok();
+    fetch_item(client, id).await
+}
+
 /// Fetch a comment forest under `root_kids`, bounded to `max` total comments so
-/// even huge threads stay responsive.
+/// even huge threads stay responsive, and to [`MAX_CONCURRENT`] in-flight requests.
 pub async fn fetch_comments(client: Client, root_kids: Vec<u64>, max: usize) -> Vec<Comment> {
     let remaining = AtomicUsize::new(max);
-    build_forest(&client, root_kids, 0, &remaining).await
+    let sem = Semaphore::new(MAX_CONCURRENT);
+    build_forest(&client, root_kids, 0, &remaining, &sem).await
 }
 
 fn build_forest<'a>(
@@ -173,6 +196,7 @@ fn build_forest<'a>(
     ids: Vec<u64>,
     depth: usize,
     remaining: &'a AtomicUsize,
+    sem: &'a Semaphore,
 ) -> BoxFuture<'a, Vec<Comment>> {
     async move {
         if depth >= 12 || ids.is_empty() {
@@ -185,13 +209,14 @@ fn build_forest<'a>(
         remaining.fetch_sub(take, Ordering::Relaxed);
         let ids: Vec<u64> = ids.into_iter().take(take).collect();
 
-        let items = join_all(ids.iter().map(|&id| fetch_item(client, id))).await;
+        let items = join_all(ids.iter().map(|&id| fetch_item_limited(client, sem, id))).await;
         let nodes = join_all(items.into_iter().filter_map(|r| r.ok().flatten()).map(
             |item| async move {
                 if item.deleted || item.dead {
                     return None;
                 }
-                let children = build_forest(client, item.kids.clone(), depth + 1, remaining).await;
+                let children =
+                    build_forest(client, item.kids.clone(), depth + 1, remaining, sem).await;
                 Some(Comment {
                     id: item.id,
                     by: if item.by.is_empty() {
