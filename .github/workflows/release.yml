@@ -1,24 +1,25 @@
 name: Release
 
 # Publish a full release when a version tag is pushed, e.g. `git tag v0.1.2 && git push --tags`.
-# A tag push runs four jobs end to end:
+# A tag push runs five jobs end to end:
 #   create-release  -> publish the GitHub Release
 #   upload          -> build and attach the per-target binaries + checksums
 #   publish-crate   -> `cargo publish` to crates.io (OIDC Trusted Publishing — no stored token)
 #   homebrew-bump   -> bump the formula in danfry1/homebrew-tap from the release checksums
+#   scoop-bump      -> bump the manifest in danfry1/scoop-bucket from the Windows checksum
 #
-# No long-lived tokens are stored. crates.io uses OIDC; the cross-repo push to the
-# tap uses a GitHub App that mints a short-lived, scoped token at run time.
+# No long-lived tokens are stored. crates.io uses OIDC; the cross-repo pushes to the
+# tap and the Scoop bucket use a GitHub App that mints a short-lived, scoped token at run time.
 #
 # One-time setup:
 #   * crates.io Trusted Publishing: on the crate's Settings -> Trusted Publishing, add
 #       Repository owner = danfry1, Repository = hacker-news-tui, Workflow = release.yml.
 #     `publish-crate` then mints a short-lived token via OIDC; no CARGO_REGISTRY_TOKEN stored.
-#   * A GitHub App (e.g. "danfry1 tap bumper") installed on danfry1/homebrew-tap with
-#     Repository permissions -> Contents: Read and write. Store its App ID as the
-#     variable TAP_BUMP_APP_ID and its private key as the secret TAP_BUMP_APP_PRIVATE_KEY
-#     on this repo. The App's token is minted per run and expires in ~1 hour; only the
-#     App private key is stored, never a long-lived token.
+#   * A GitHub App (e.g. "danfry1 tap bumper") installed on BOTH danfry1/homebrew-tap and
+#     danfry1/scoop-bucket with Repository permissions -> Contents: Read and write. Store its
+#     App ID as the variable TAP_BUMP_APP_ID and its private key as the secret
+#     TAP_BUMP_APP_PRIVATE_KEY on this repo. The App's token is minted per run and expires in
+#     ~1 hour; only the App private key is stored, never a long-lived token.
 #
 # Supply-chain hardening: every action is pinned to a full commit SHA (a moving tag like
 # `@v1` could be repointed at malicious code); permissions are least-privilege per job.
@@ -189,6 +190,74 @@ jobs:
           cd tap
           if git diff --quiet; then
             echo "Formula already up to date; nothing to commit."
+            exit 0
+          fi
+          bot_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git commit -am "Update hacker-news-tui to ${TAG#v}"
+          git push
+
+  # Bump the Scoop manifest in the bucket, the Windows counterpart to the
+  # Homebrew job. The manifest is JSON, so jq sets the version, URL, and the
+  # zip's sha256 read straight from this release's `.sha256` asset.
+  scoop-bump:
+    name: Bump Scoop manifest
+    needs: upload
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read this release's assets; the bucket push uses the App token
+    steps:
+      - name: Mint a bucket token from the GitHub App
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.TAP_BUMP_APP_ID }}
+          private-key: ${{ secrets.TAP_BUMP_APP_PRIVATE_KEY }}
+          owner: danfry1
+          repositories: scoop-bucket
+
+      - name: Check out the bucket
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: danfry1/scoop-bucket
+          token: ${{ steps.app-token.outputs.token }}
+          path: scoop-bucket
+
+      - name: Update the manifest from the release checksum
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          asset=hacker-news-tui-x86_64-pc-windows-msvc.zip
+          gh release download "$TAG" --repo "$REPO" --pattern "$asset.sha256" --dir shas
+          hash=$(awk '{print $1}' "shas/$asset.sha256")
+          url="https://github.com/danfry1/hacker-news-tui/releases/download/v${version}/${asset}"
+
+          manifest=scoop-bucket/bucket/hacker-news-tui.json
+          jq --arg v "$version" --arg u "$url" --arg h "$hash" '
+            .version = $v
+            | .architecture["64bit"].url = $u
+            | .architecture["64bit"].hash = $h
+          ' "$manifest" > "$manifest.new"
+          mv "$manifest.new" "$manifest"
+
+          echo "--- updated manifest ---"
+          cat "$manifest"
+
+      - name: Commit and push as the App bot
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          cd scoop-bucket
+          if git diff --quiet; then
+            echo "Manifest already up to date; nothing to commit."
             exit 0
           fi
           bot_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
