@@ -556,9 +556,12 @@ impl App {
     }
 
     fn open(&mut self, url: &str) {
-        util::open_in_browser(url);
         let label = util::domain(url).unwrap_or_else(|| "link".to_string());
-        self.toast(format!("opened {label} in browser"));
+        if util::open_in_browser(url) {
+            self.toast(format!("opened {label} in browser"));
+        } else {
+            self.toast(format!("couldn't open {label}"));
+        }
     }
 
     fn toast(&mut self, msg: impl Into<String>) {

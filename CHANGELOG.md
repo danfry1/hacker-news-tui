@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Choose the browser used to open links via the `$HN_TUI_BROWSER` environment
+  variable (e.g. `lynx` or `firefox --new-window`). Because it is app-specific,
+  it can be exported in a shell profile without changing the system default
+  browser. The standard `$BROWSER` is honored as a fallback, and the OS default
+  is used when neither is set. A failed launch (e.g. a mistyped command) now
+  shows a toast instead of failing silently.
+
 ## [0.1.3] - 2026-06-15
 
 ### Changed

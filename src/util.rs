@@ -137,11 +137,40 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// Open a URL in the user's default browser without pulling in a dependency.
-pub fn open_in_browser(url: &str) {
-    let _ = browser_command(url).map(|mut c| {
-        let _ = c.spawn();
-    });
+/// Open a URL in a browser without pulling in a dependency.
+///
+/// The browser is chosen, in order, from `$HN_TUI_BROWSER` (app-specific, so it
+/// can be exported globally without touching the system default), the standard
+/// `$BROWSER`, and finally the OS default opener. A value may include arguments
+/// (e.g. `firefox --new-window`). The URL is always passed as a discrete
+/// argument — never through a shell — so a hostile URL can't smuggle in extra
+/// commands. Returns whether the browser process was spawned successfully.
+pub fn open_in_browser(url: &str) -> bool {
+    let from_env = browser_spec().and_then(|b| build_command(&b, url));
+    match from_env.or_else(|| browser_command(url)) {
+        Some(mut c) => c.spawn().is_ok(),
+        None => false,
+    }
+}
+
+/// The first non-empty browser command from the environment, preferring the
+/// app-specific `$HN_TUI_BROWSER` over the system-wide `$BROWSER`.
+fn browser_spec() -> Option<String> {
+    ["HN_TUI_BROWSER", "BROWSER"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|value| !value.trim().is_empty())
+}
+
+/// Build a command from a `program arg1 arg2…` string, appending `url` as a
+/// final discrete argument. Returns `None` when the string has no program.
+fn build_command(spec: &str, url: &str) -> Option<std::process::Command> {
+    let mut parts = spec.split_whitespace();
+    let program = parts.next()?;
+    let mut c = std::process::Command::new(program);
+    c.args(parts);
+    c.arg(url);
+    Some(c)
 }
 
 #[cfg(target_os = "macos")]
@@ -215,6 +244,19 @@ mod tests {
     fn wrap_respects_width_and_blank_lines() {
         let out = wrap("the quick brown fox\n\njumps", 9);
         assert_eq!(out, vec!["the quick", "brown fox", "", "jumps"]);
+    }
+
+    #[test]
+    fn browser_command_splits_args_and_appends_url() {
+        let c = build_command("firefox --new-window", "https://example.com").unwrap();
+        assert_eq!(c.get_program(), "firefox");
+        let args: Vec<_> = c.get_args().collect();
+        assert_eq!(args, ["--new-window", "https://example.com"]);
+    }
+
+    #[test]
+    fn browser_command_blank_spec_is_none() {
+        assert!(build_command("   ", "https://example.com").is_none());
     }
 
     #[test]

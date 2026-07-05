@@ -119,6 +119,20 @@ In the settings pane, `j`/`k` move, `space`/`enter` toggle, `,`/`esc` close.
 In the bookmarks view, `enter` opens comments, `o` opens the article, `s`
 removes a bookmark, and `b`/`esc` returns to the feed.
 
+### Choosing a browser
+`o` opens links in a browser of your choice — including a terminal one. Set
+`HN_TUI_BROWSER` to a command (arguments are allowed):
+
+```sh
+export HN_TUI_BROWSER=lynx                   # text browser
+export HN_TUI_BROWSER='firefox --new-window'
+```
+
+`HN_TUI_BROWSER` only affects this app, so you can `export` it in your shell
+profile (`~/.zshrc`, `~/.bashrc`, …) without changing your system default
+browser. The standard `$BROWSER` variable is also honored as a fallback, and
+when neither is set, links open in your OS default browser as before.
+
 ## Persistence & privacy
 
 Read-state and bookmarks can be remembered across runs, but **only when you
