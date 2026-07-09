@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-09
+
 ### Added
 
 - Choose the browser used to open links via the `$HN_TUI_BROWSER` environment
@@ -13,7 +15,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it can be exported in a shell profile without changing the system default
   browser. The standard `$BROWSER` is honored as a fallback, and the OS default
   is used when neither is set. A failed launch (e.g. a mistyped command) now
-  shows a toast instead of failing silently.
+  shows a toast instead of failing silently. Thanks to @gsmitheidw for
+  suggesting this (#9).
 
 ## [0.1.3] - 2026-06-15
 
@@ -81,6 +84,9 @@ Initial release: a terminal UI for browsing Hacker News, built with Ratatui.
 - Persisted state lives in the platform data directory
   (`~/Library/Application Support/hacker-news-tui/state.json` on macOS).
 
-[Unreleased]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/danfry1/hacker-news-tui/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/danfry1/hacker-news-tui/releases/tag/v0.1.0
