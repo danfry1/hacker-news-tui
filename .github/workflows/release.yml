@@ -232,13 +232,16 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          asset=hacker-news-tui-x86_64-pc-windows-msvc.zip
-          gh release download "$TAG" --repo "$REPO" --pattern "$asset.sha256" --dir shas
-          hash=$(awk '{print $1}' "shas/$asset.sha256")
+          base=hacker-news-tui-x86_64-pc-windows-msvc
+          asset="$base.zip"
+          # The checksum asset is named after the target (no archive extension),
+          # e.g. hacker-news-tui-x86_64-pc-windows-msvc.sha256.
+          gh release download "$TAG" --repo "$REPO" --pattern "$base.sha256" --dir shas
+          hash=$(awk '{print $1}' "shas/$base.sha256")
           url="https://github.com/danfry1/hacker-news-tui/releases/download/v${version}/${asset}"
 
           manifest=scoop-bucket/bucket/hacker-news-tui.json
-          jq --arg v "$version" --arg u "$url" --arg h "$hash" '
+          jq --indent 4 --arg v "$version" --arg u "$url" --arg h "$hash" '
             .version = $v
             | .architecture["64bit"].url = $u
             | .architecture["64bit"].hash = $h
