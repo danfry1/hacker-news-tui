@@ -348,10 +348,10 @@ impl App {
 
     pub fn tick(&mut self) {
         self.spinner = self.spinner.wrapping_add(1);
-        if let Some((_, until)) = &self.toast {
-            if Instant::now() >= *until {
-                self.toast = None;
-            }
+        if let Some((_, until)) = &self.toast
+            && Instant::now() >= *until
+        {
+            self.toast = None;
         }
     }
 
@@ -582,10 +582,10 @@ impl App {
     }
 
     fn cancel_prompt(&mut self) {
-        if let Some(prompt) = self.prompt.take() {
-            if let Some(origin) = prompt.origin {
-                self.select_row(origin);
-            }
+        if let Some(prompt) = self.prompt.take()
+            && let Some(origin) = prompt.origin
+        {
+            self.select_row(origin);
         }
     }
 
@@ -964,14 +964,14 @@ impl App {
         };
         self.link_cursor = Some((id, idx + 1));
         self.open(&links[idx]);
-        if links.len() > 1 {
-            if let Some((msg, _)) = &mut self.toast {
-                msg.push_str(&format!(
-                    " · link {} of {} (u for next)",
-                    idx + 1,
-                    links.len()
-                ));
-            }
+        if links.len() > 1
+            && let Some((msg, _)) = &mut self.toast
+        {
+            msg.push_str(&format!(
+                " · link {} of {} (u for next)",
+                idx + 1,
+                links.len()
+            ));
         }
     }
 

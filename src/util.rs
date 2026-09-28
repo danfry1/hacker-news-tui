@@ -87,12 +87,12 @@ fn decode_entities(s: &str) -> String {
         // slicing up to it is always safe even when multi-byte chars follow.
         if let Some(semi) = tail.find(';') {
             let entity = &tail[1..semi];
-            if entity.len() <= 10 {
-                if let Some(ch) = decode_one(entity) {
-                    out.push(ch);
-                    rest = &tail[semi + 1..];
-                    continue;
-                }
+            if entity.len() <= 10
+                && let Some(ch) = decode_one(entity)
+            {
+                out.push(ch);
+                rest = &tail[semi + 1..];
+                continue;
             }
         }
         out.push('&');
