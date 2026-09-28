@@ -196,6 +196,8 @@ cargo audit
 | `src/main.rs` | Terminal setup and the async event loop (input · fetch results · tick) |
 | `src/api.rs` | Hacker News Firebase API client and data types |
 | `src/app.rs` | Application state, input handling, async orchestration |
+| `src/app/tests.rs` | State-machine tests for `App`, driven without I/O |
+| `src/color.rs` | Adapts rendered frames to 256-colour or `NO_COLOR` terminals |
 | `src/ui.rs` | All rendering — pure functions of the app state |
 | `src/store.rs` | Best-effort persistence of settings, read-state, bookmarks |
 | `src/util.rs` | Time/URL/HTML/wrapping helpers (unit-tested) |
