@@ -18,6 +18,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   @csabaxyz for suggesting this (#13).
 - `O` opens a story's Hacker News discussion page in the browser (from the
   feed, bookmarks, or an open discussion), whatever the story links to.
+- Colour support for more terminals. Where 24-bit colour isn't available
+  (detected for macOS Terminal.app), colours are mapped to the nearest of the
+  standard 256 instead of rendering incorrectly. `NO_COLOR` is honored, with
+  the selection and search matches shown in reverse video. `HN_TUI_COLOR`
+  (`truecolor`, `256`, or `none`) overrides detection.
 
 ### Fixed
 

@@ -2,6 +2,7 @@
 
 mod api;
 mod app;
+mod color;
 mod store;
 mod ui;
 mod util;
@@ -23,6 +24,12 @@ USAGE:
 OPTIONS:
     -h, --help       Print this help and exit
     -V, --version    Print version and exit
+
+ENVIRONMENT:
+    HN_TUI_BROWSER   Command used to open links (falls back to $BROWSER,
+                     then the system default)
+    HN_TUI_COLOR     Force colour output: truecolor, 256, or none
+    NO_COLOR         Disable colour (https://no-color.org)
 
 Once running, press ? for the in-app keyboard shortcuts.";
 
@@ -63,12 +70,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         persisted.saved,
     );
 
+    let colors = color::ColorMode::from_env();
     let mut terminal = ratatui::init();
     let mut events = EventStream::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(120));
 
     let result = loop {
-        if let Err(e) = terminal.draw(|frame| ui::draw(frame, &mut app)) {
+        if let Err(e) = terminal.draw(|frame| ui::draw(frame, &mut app, colors)) {
             break Err(e.into());
         }
 
