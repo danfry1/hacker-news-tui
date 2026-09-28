@@ -137,6 +137,29 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Byte ranges of the non-overlapping, ASCII case-insensitive occurrences of
+/// `needle` in `haystack`. ASCII folding keeps byte offsets identical between
+/// the folded and original strings, so the ranges index `haystack` directly and
+/// always fall on char boundaries. An empty needle matches nothing.
+pub fn find_ci(haystack: &str, needle: &str) -> Vec<std::ops::Range<usize>> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let hay = haystack.to_ascii_lowercase();
+    let needle = needle.to_ascii_lowercase();
+    hay.match_indices(&needle)
+        .map(|(i, m)| i..i + m.len())
+        .collect()
+}
+
+/// Whether `haystack` contains `needle`, ignoring ASCII case.
+pub fn contains_ci(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty()
+        && haystack
+            .to_ascii_lowercase()
+            .contains(&needle.to_ascii_lowercase())
+}
+
 /// Open a URL in a browser without pulling in a dependency.
 ///
 /// The browser is chosen, in order, from `$HN_TUI_BROWSER` (app-specific, so it
@@ -268,5 +291,23 @@ mod tests {
         assert_eq!(time_ago(now), "just now");
         assert_eq!(time_ago(now - 120), "2m ago");
         assert_eq!(time_ago(now - 7200), "2h ago");
+    }
+
+    #[test]
+    fn find_ci_returns_case_insensitive_byte_ranges() {
+        assert_eq!(find_ci("Rust and rust", "RUST"), vec![0..4, 9..13]);
+        assert_eq!(find_ci("aaaa", "aa"), vec![0..2, 2..4]); // non-overlapping
+        assert!(find_ci("anything", "").is_empty());
+        // Ranges stay on char boundaries around multi-byte text.
+        let s = "café Rust";
+        let r = find_ci(s, "rust");
+        assert_eq!(&s[r[0].clone()], "Rust");
+    }
+
+    #[test]
+    fn contains_ci_ignores_case_and_rejects_empty() {
+        assert!(contains_ci("Show HN: Thing", "show hn"));
+        assert!(!contains_ci("Show HN: Thing", "ask"));
+        assert!(!contains_ci("anything", ""));
     }
 }

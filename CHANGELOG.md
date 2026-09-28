@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Jump straight to a story by its number with `:` (e.g. `:10` then `enter`),
+  vim-style. Numbers beyond the stories loaded so far fetch ahead until the
+  target is reachable. Also works in the bookmarks view.
+- Search with `/`, with `n` / `N` for the next / previous match (wrapping
+  around). The selection moves as the query is typed, `esc` restores it, and
+  matches are highlighted. In the feed and bookmarks it searches titles and
+  domains; in a discussion it searches comment text and authors. Thanks to
+  @csabaxyz for suggesting this (#13).
+
 ### Security
 
 - Update `rustls` to 0.23.45 (and `rustls-webpki` to 0.103.15) to address

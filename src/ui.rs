@@ -10,7 +10,7 @@ use ratatui::widgets::{
 };
 
 use crate::api::{Feed, Item};
-use crate::app::{App, Load, SETTINGS_COUNT, View};
+use crate::app::{App, Load, PromptKind, SETTINGS_COUNT, View};
 use crate::util;
 
 const ORANGE: Color = Color::Rgb(255, 102, 0);
@@ -137,6 +137,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let width = area.width.saturating_sub(6) as usize;
+    let query = app.highlight_query();
     let items: Vec<ListItem> = stories
         .iter()
         .enumerate()
@@ -147,6 +148,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 app.visited.contains(&story.id),
                 app.is_saved(story.id),
                 width,
+                query,
             )
         })
         .collect();
@@ -172,7 +174,10 @@ fn draw_bookmarks(frame: &mut Frame, app: &mut App, area: Rect) {
         .saved
         .iter()
         .enumerate()
-        .map(|(i, story)| story_row(i, story, app.visited.contains(&story.id), true, width))
+        .map(|(i, story)| {
+            let read = app.visited.contains(&story.id);
+            story_row(i, story, read, true, width, app.highlight_query())
+        })
         .collect();
 
     let list = story_list(items);
@@ -180,7 +185,14 @@ fn draw_bookmarks(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// A single two-line story row, shared by the feed list and the bookmarks view.
-fn story_row(i: usize, story: &Item, read: bool, saved: bool, width: usize) -> ListItem<'static> {
+fn story_row(
+    i: usize,
+    story: &Item,
+    read: bool,
+    saved: bool,
+    width: usize,
+    query: Option<&str>,
+) -> ListItem<'static> {
     let title_style = if read {
         Style::default().fg(READ)
     } else {
@@ -196,12 +208,15 @@ fn story_row(i: usize, story: &Item, read: bool, saved: bool, width: usize) -> L
     if saved {
         title_spans.push(Span::styled("★ ", Style::default().fg(ORANGE)));
     }
-    title_spans.push(Span::styled(truncate(&story.title, width), title_style));
+    title_spans.extend(highlighted(
+        &truncate(&story.title, width),
+        query,
+        title_style,
+    ));
     if let Some(dom) = story.url.as_deref().and_then(util::domain) {
-        title_spans.push(Span::styled(
-            format!("  ({dom})"),
-            Style::default().fg(FAINT),
-        ));
+        title_spans.push(Span::styled("  (", Style::default().fg(FAINT)));
+        title_spans.extend(highlighted(&dom, query, Style::default().fg(FAINT)));
+        title_spans.push(Span::styled(")", Style::default().fg(FAINT)));
     }
 
     let meta = Line::from(vec![
@@ -262,6 +277,7 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
     let op = app.story.as_ref().map(|s| s.by.clone()).unwrap_or_default();
     let text_width = body.width.saturating_sub(1) as usize;
 
+    let query = app.highlight_query();
     let visible = app.visible_comments();
     let items: Vec<ListItem> = visible
         .iter()
@@ -282,13 +298,14 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
                     marker,
                     Style::default().fg(if flat.collapsed { ORANGE } else { DIM }),
                 ),
-                Span::styled(
-                    flat.by.clone(),
-                    Style::default()
-                        .fg(if is_op { ORANGE } else { ACCENT })
-                        .add_modifier(Modifier::BOLD),
-                ),
             ];
+            head.extend(highlighted(
+                &flat.by,
+                query,
+                Style::default()
+                    .fg(if is_op { ORANGE } else { ACCENT })
+                    .add_modifier(Modifier::BOLD),
+            ));
             if is_op {
                 head.push(Span::styled(" OP", Style::default().fg(ORANGE)));
             }
@@ -307,10 +324,9 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
             if !flat.collapsed {
                 let body_width = text_width.saturating_sub(flat.depth * 2);
                 for wl in util::wrap(&flat.text, body_width) {
-                    lines.push(Line::from(vec![
-                        Span::styled(indent.clone(), bar),
-                        Span::raw(wl),
-                    ]));
+                    let mut spans = vec![Span::styled(indent.clone(), bar)];
+                    spans.extend(highlighted(&wl, query, Style::default()));
+                    lines.push(Line::from(spans));
                 }
             }
             lines.push(Line::from(""));
@@ -462,6 +478,28 @@ fn thread_color(depth: usize) -> Color {
 // ── footer ───────────────────────────────────────────────────────────────────
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+    // An open prompt owns the footer, ahead of any toast.
+    if let Some(prompt) = &app.prompt {
+        let (sigil, hint) = match prompt.kind {
+            PromptKind::Jump => (":", "story number · enter jump · esc cancel"),
+            PromptKind::Search => ("/", "enter search · n/N next/prev · esc cancel"),
+        };
+        let text = format!(" {sigil}{}", prompt.input);
+        let cursor_x = area.x + text.chars().count() as u16;
+        let line = Line::from(vec![
+            Span::styled(
+                text,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("   {hint}"), Style::default().fg(FAINT)),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
+        frame.set_cursor_position((cursor_x.min(area.right().saturating_sub(1)), area.y));
+        return;
+    }
+
     if let Some((msg, _)) = &app.toast {
         let line = Line::from(Span::styled(
             format!(" ✓ {msg} "),
@@ -486,6 +524,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         View::Comments => &[
             ("j/k", "move"),
             ("space", "collapse"),
+            ("/", "search"),
             ("o", "article"),
             ("s", "save"),
             ("esc", "back"),
@@ -521,7 +560,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 // ── overlays ─────────────────────────────────────────────────────────────────
 
 fn draw_help(frame: &mut Frame, area: Rect) {
-    let popup = centered(58, 19, area);
+    let popup = centered(58, 20, area);
     frame.render_widget(Clear, popup);
 
     let key = Style::default().fg(ORANGE).add_modifier(Modifier::BOLD);
@@ -539,6 +578,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled("  Stories", head)),
         row("j / k  ↑ ↓", "move selection"),
         row("g / G", "jump to top / bottom"),
+        row(":10", "jump to story 10"),
+        row("/ · n / N", "search titles · next / previous"),
         row("enter", "open comments"),
         row("o", "open article in browser"),
         row("s / b", "save / view bookmarks"),
@@ -547,6 +588,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled("  Comments", head)),
         row("space / enter", "collapse / expand"),
+        row("/ · n / N", "search comments · next / previous"),
         row("o  /  s", "open article / save"),
         row("esc / h", "back"),
         Line::from(""),
@@ -651,6 +693,29 @@ fn centered(w: u16, h: u16, area: Rect) -> Rect {
         width: w,
         height: h,
     }
+}
+
+/// Split `text` into spans in `base` style, with case-insensitive matches of
+/// `query` picked out so search hits stand out.
+fn highlighted(text: &str, query: Option<&str>, base: Style) -> Vec<Span<'static>> {
+    let ranges = query.map(|q| util::find_ci(text, q)).unwrap_or_default();
+    if ranges.is_empty() {
+        return vec![Span::styled(text.to_string(), base)];
+    }
+    let hit = base.fg(Color::Black).bg(ORANGE);
+    let mut spans = Vec::with_capacity(ranges.len() * 2 + 1);
+    let mut at = 0;
+    for r in ranges {
+        if r.start > at {
+            spans.push(Span::styled(text[at..r.start].to_string(), base));
+        }
+        spans.push(Span::styled(text[r.clone()].to_string(), hit));
+        at = r.end;
+    }
+    if at < text.len() {
+        spans.push(Span::styled(text[at..].to_string(), base));
+    }
+    spans
 }
 
 fn truncate(s: &str, max: usize) -> String {
