@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- Update `rustls` to 0.23.45 (and `rustls-webpki` to 0.103.15) to address
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285), in
+  which TLS 1.3 handshake messages could be accepted across encryption level
+  boundaries.
+
 ## [0.1.4] - 2026-07-09
 
 ### Added
