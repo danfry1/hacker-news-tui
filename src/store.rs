@@ -3,8 +3,12 @@
 //! losing local UI state is never worth interrupting the user.
 //!
 //! Read-state and bookmarks are only written when the user has enabled them in
-//! the in-app settings pane; the settings themselves are always persisted so the
-//! choice sticks across runs.
+//! the in-app settings pane, and the settings are saved alongside them. With
+//! everything disabled nothing is written, and any existing file is removed.
+//!
+//! Writes are atomic (a temporary file renamed over the original), so an
+//! interrupted save can never leave a truncated file that would load as empty
+//! and then be saved over, losing bookmarks.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -12,6 +16,11 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::api::Item;
+
+/// Most read-story ids kept on disk. Hacker News ids increase over time, so
+/// keeping the largest drops the oldest stories first, and the file stays
+/// small (tens of KB) however long the app is used.
+const MAX_READ: usize = 5_000;
 
 /// Persistence is opt-in: both default to `false` so a fresh install writes
 /// nothing to disk until the user enables it in the settings pane.
@@ -52,29 +61,51 @@ pub fn save(settings: &Settings, read: &HashSet<u64>, saved: &[Item]) {
     let Some(path) = state_path() else {
         return;
     };
-    if !settings.remember_read && !settings.remember_bookmarks {
+    let Some(store) = snapshot(settings, read, saved) else {
         let _ = std::fs::remove_file(&path);
         return;
-    }
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let store = Store {
-        settings: settings.clone(),
-        read: if settings.remember_read {
-            read.iter().copied().collect()
-        } else {
-            Vec::new()
-        },
-        saved: if settings.remember_bookmarks {
-            saved.to_vec()
-        } else {
-            Vec::new()
-        },
     };
     if let Ok(json) = serde_json::to_vec_pretty(&store) {
-        let _ = std::fs::write(path, json);
+        let _ = write_atomic(&path, &json);
     }
+}
+
+/// What to persist for the given state, or `None` when persistence is off.
+fn snapshot(settings: &Settings, read: &HashSet<u64>, saved: &[Item]) -> Option<Store> {
+    if !settings.remember_read && !settings.remember_bookmarks {
+        return None;
+    }
+    let read = if settings.remember_read {
+        let mut ids: Vec<u64> = read.iter().copied().collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a)); // newest first
+        ids.truncate(MAX_READ);
+        ids
+    } else {
+        Vec::new()
+    };
+    let saved = if settings.remember_bookmarks {
+        saved.to_vec()
+    } else {
+        Vec::new()
+    };
+    Some(Store {
+        settings: settings.clone(),
+        read,
+        saved,
+    })
+}
+
+/// Replace `path` with `bytes` all-or-nothing: write a sibling temp file, then
+/// rename it into place (atomic on the same filesystem).
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 fn state_path() -> Option<PathBuf> {
@@ -120,6 +151,50 @@ mod tests {
         assert_eq!(store.read, vec![1, 2, 3]);
         assert!(!store.settings.remember_read);
         assert!(store.saved.is_empty());
+    }
+
+    fn on(read: bool, bookmarks: bool) -> Settings {
+        Settings {
+            remember_read: read,
+            remember_bookmarks: bookmarks,
+        }
+    }
+
+    #[test]
+    fn nothing_is_persisted_when_both_toggles_are_off() {
+        assert!(snapshot(&on(false, false), &HashSet::from([1]), &[]).is_none());
+    }
+
+    #[test]
+    fn only_enabled_data_is_persisted() {
+        let read = HashSet::from([1, 2]);
+        let saved = [Item::default()];
+        let s = snapshot(&on(true, false), &read, &saved).unwrap();
+        assert_eq!(s.read.len(), 2);
+        assert!(s.saved.is_empty());
+        let s = snapshot(&on(false, true), &read, &saved).unwrap();
+        assert!(s.read.is_empty());
+        assert_eq!(s.saved.len(), 1);
+    }
+
+    #[test]
+    fn read_history_is_capped_to_the_newest_ids() {
+        let read: HashSet<u64> = (1..=(MAX_READ as u64 + 10)).collect();
+        let s = snapshot(&on(true, false), &read, &[]).unwrap();
+        assert_eq!(s.read.len(), MAX_READ);
+        assert_eq!(s.read[0], MAX_READ as u64 + 10); // newest kept
+        assert!(!s.read.contains(&10)); // oldest dropped
+    }
+
+    #[test]
+    fn atomic_write_replaces_the_file_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join(format!("hn-tui-store-{}", std::process::id()));
+        let path = dir.join("nested").join("state.json");
+        write_atomic(&path, b"first").unwrap();
+        write_atomic(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
