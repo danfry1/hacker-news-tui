@@ -105,6 +105,9 @@ pub struct App {
     /// A `:N` target beyond the stories loaded so far; pages are fetched until
     /// it is reachable, then it is selected.
     pending_jump: Option<usize>,
+    /// The story selected when the feed was refreshed, to select again once
+    /// the new ranking arrives (it has usually moved).
+    reselect: Option<u64>,
 
     pub prompt: Option<Prompt>,
     /// The last submitted search, reused by `n` / `N` and highlighted on screen.
@@ -168,6 +171,7 @@ impl App {
             loading_more: false,
             story_gen: 0,
             pending_jump: None,
+            reselect: None,
             prompt: None,
             search: None,
             story: None,
@@ -235,6 +239,7 @@ impl App {
         self.ids_loaded = 0;
         self.loading_more = false;
         self.pending_jump = None;
+        self.reselect = None;
         let (client, feed, tx) = (self.client.clone(), self.feed, self.tx.clone());
         (self.spawn)(Box::pin(async move {
             let result = match api::fetch_ids(&client, feed).await {
@@ -311,6 +316,7 @@ impl App {
                     }
                     Err(e) => Load::Failed(e),
                 };
+                self.restore_selection();
             }
             Msg::MoreStories { seq, mut items } if seq == self.story_gen => {
                 self.loading_more = false;
@@ -394,9 +400,11 @@ impl App {
     }
 
     fn on_key_list(&mut self, key: KeyEvent) {
-        // Any further input supersedes a `:N` jump still waiting on the network,
-        // so the selection is never yanked away after the user moves on.
+        // Any further input supersedes a `:N` jump (or a refresh reselect) still
+        // waiting on the network, so the selection is never yanked away after
+        // the user moves on.
         self.pending_jump = None;
+        self.reselect = None;
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = true,
@@ -421,7 +429,9 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.toast("refreshing…");
+                let current = self.selected_story().map(|s| s.id);
                 self.load_feed();
+                self.reselect = current;
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
                 self.feed = self.feed.next();
@@ -690,9 +700,42 @@ impl App {
         };
         if target < self.story_len() || self.ids_loaded >= self.story_ids.len() {
             self.pending_jump = None;
-            self.select_list(target as isize);
+            // A refresh targets a story, not a number: its position in the id
+            // list only bounds how far to fetch, since dead stories are
+            // filtered out of the list and shift later ones up.
+            let idx = self
+                .reselect
+                .take()
+                .and_then(|id| self.story_index(id))
+                .unwrap_or(target);
+            self.select_list(idx as isize);
         } else {
             self.load_more();
+        }
+    }
+
+    /// After a refresh, select the story that was selected before it, fetching
+    /// ahead if it has dropped below the first page. Stories that left the
+    /// feed fall back to the top.
+    fn restore_selection(&mut self) {
+        let Some(id) = self.reselect else {
+            return;
+        };
+        if let Some(idx) = self.story_index(id) {
+            self.reselect = None;
+            self.select_list(idx as isize);
+        } else if let Some(pos) = self.story_ids.iter().position(|&i| i == id) {
+            self.pending_jump = Some(pos);
+            self.load_more();
+        } else {
+            self.reselect = None;
+        }
+    }
+
+    fn story_index(&self, id: u64) -> Option<usize> {
+        match &self.stories {
+            Load::Ready(s) => s.iter().position(|it| it.id == id),
+            _ => None,
         }
     }
 
@@ -1523,6 +1566,77 @@ mod tests {
         assert!(app.toast.is_some());
         assert_eq!(app.story_gen, before + 1);
         assert!(matches!(app.stories, Load::Loading));
+    }
+
+    #[test]
+    fn refresh_keeps_the_selected_story_selected() {
+        let (mut app, _rx) = loaded(40);
+        for _ in 0..3 {
+            app.on_key(ch('j')); // select story id 4
+        }
+        app.on_key(ch('r'));
+        let seq = app.story_gen;
+        // It has moved up the ranking since.
+        app.on_msg(Msg::Stories {
+            seq,
+            result: Ok((vec![9, 4, 7], items(&[9, 4, 7]))),
+        });
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[test]
+    fn refresh_fetches_ahead_for_a_story_that_dropped() {
+        let (mut app, _rx) = loaded(100);
+        app.on_key(ch('j')); // story id 2
+        app.on_key(ch('r'));
+        let seq = app.story_gen;
+        let mut ids: Vec<u64> = (3..=60).collect();
+        ids.push(2); // dropped to position 58, beyond the first page
+        app.on_msg(Msg::Stories {
+            seq,
+            result: Ok((ids.clone(), items(&ids[..FIRST_PAGE]))),
+        });
+        assert_eq!(app.pending_jump, Some(58));
+        assert!(app.loading_more);
+        // One dead story in the batch shifts it up a row; it is found by id.
+        let batch: Vec<u64> = ids[FIRST_PAGE..]
+            .iter()
+            .copied()
+            .filter(|&i| i != 30)
+            .collect();
+        app.on_msg(Msg::MoreStories {
+            seq,
+            items: items(&batch),
+        });
+        assert_eq!(selected(&app), Some(57));
+        assert_eq!(app.selected_story().unwrap().id, 2);
+    }
+
+    #[test]
+    fn refresh_falls_back_to_top_when_story_left_the_feed() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(ch('j'));
+        app.on_key(ch('r'));
+        let seq = app.story_gen;
+        app.on_msg(Msg::Stories {
+            seq,
+            result: Ok(((50..=60).collect(), items(&[50, 51]))),
+        });
+        assert_eq!(selected(&app), Some(0));
+        assert_eq!(app.pending_jump, None);
+    }
+
+    #[test]
+    fn switching_feeds_does_not_reselect() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(ch('j'));
+        app.on_key(key(KeyCode::Tab));
+        let seq = app.story_gen;
+        app.on_msg(Msg::Stories {
+            seq,
+            result: Ok(((1..=40).collect(), items(&[1, 2, 3]))),
+        });
+        assert_eq!(selected(&app), Some(0));
     }
 
     #[test]

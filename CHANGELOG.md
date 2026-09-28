@@ -31,6 +31,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "showing the first 250 of 1,204 comments", and point to `O` for the full
   thread, instead of silently showing part of it.
 
+### Changed
+
+- Refreshing (`r`) keeps the selected story selected at its new position in
+  the ranking, loading further stories if it has dropped below the first
+  page, instead of jumping back to the top.
+
 ### Fixed
 
 - Centered status messages ("fetching stories…", load errors, empty views)
