@@ -55,6 +55,27 @@ pub fn clean_html(s: &str) -> String {
     decode_entities(&stripped).trim().to_string()
 }
 
+/// The `http(s)` link targets in an HN HTML snippet, in order, deduplicated.
+/// These are the real `href`s: HN abbreviates long URLs in the visible link
+/// text, so the cleaned text can't be used to open them.
+pub fn extract_links(html: &str) -> Vec<String> {
+    let mut links: Vec<String> = Vec::new();
+    let mut rest = html;
+    while let Some(at) = rest.find("href=\"") {
+        rest = &rest[at + 6..];
+        let Some(end) = rest.find('"') else {
+            break;
+        };
+        let url = decode_entities(&rest[..end]);
+        rest = &rest[end..];
+        let is_web = url.starts_with("https://") || url.starts_with("http://");
+        if is_web && !links.contains(&url) {
+            links.push(url);
+        }
+    }
+    links
+}
+
 /// Decode the HTML entities HN actually emits (named common ones + numeric).
 fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -261,6 +282,21 @@ mod tests {
     fn html_keeps_link_text_drops_tags() {
         let raw = r#"see <a href="https://x.com" rel="nofollow">https://x.com</a> now"#;
         assert_eq!(clean_html(raw), "see https://x.com now");
+    }
+
+    #[test]
+    fn links_come_from_hrefs_not_the_abbreviated_text() {
+        let raw = concat!(
+            r#"see <a href="https:&#x2F;&#x2F;example.com&#x2F;a&#x2F;very&#x2F;long&#x2F;path" rel="nofollow">"#,
+            r#"https:&#x2F;&#x2F;example.com&#x2F;a&#x2F;very&#x2F;l...</a>"#,
+            r#" and <a href="http://x.org">x</a>, again <a href="http://x.org">x</a>"#,
+            r#" <a href="javascript:alert(1)">no</a>"#,
+        );
+        assert_eq!(
+            extract_links(raw),
+            ["https://example.com/a/very/long/path", "http://x.org"]
+        );
+        assert!(extract_links("no links here").is_empty());
     }
 
     #[test]

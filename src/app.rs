@@ -21,12 +21,17 @@ type Task = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// How background work is run. Real builds use Tokio; tests use a no-op so the
 /// state machine can be exercised deterministically without touching the network.
 type Spawner = Box<dyn Fn(Task) + Send>;
+/// How URLs are opened; returns whether the browser launched. Tests swap in a
+/// recorder so `o` / `O` / `u` can be exercised without launching anything.
+type Opener = Box<dyn Fn(&str) -> bool + Send>;
 
 /// Stories materialized for the very first paint — about one screenful, kept
 /// small so the initial interaction is as snappy as possible.
 const FIRST_PAGE: usize = 20;
 /// Stories materialized per batch when scrolling further down.
 const PAGE: usize = 30;
+/// Most comments fetched for one discussion, so huge threads stay responsive.
+const COMMENT_LIMIT: usize = 250;
 
 /// Messages sent from background fetch tasks back to the UI loop.
 pub enum Msg {
@@ -41,6 +46,8 @@ pub enum Msg {
     Comments {
         seq: u64,
         result: Vec<Comment>,
+        /// Whether [`COMMENT_LIMIT`] (or the depth bound) left comments out.
+        truncated: bool,
     },
 }
 
@@ -79,6 +86,7 @@ pub struct App {
     client: Client,
     tx: UnboundedSender<Msg>,
     spawn: Spawner,
+    opener: Opener,
 
     pub view: View,
     pub show_help: bool,
@@ -105,6 +113,12 @@ pub struct App {
     pub story: Option<Item>,
     pub comments: Load<Vec<Comment>>,
     pub comment_state: ListState,
+    /// Comments loaded for the open discussion, and whether that is less than
+    /// the whole thread (see [`COMMENT_LIMIT`]).
+    pub comments_loaded: usize,
+    pub comments_truncated: bool,
+    /// The comment whose links `u` is stepping through, and the next index.
+    link_cursor: Option<(u64, usize)>,
     pub collapsed: HashSet<u64>,
     /// Flattened, depth-annotated comment rows honoring collapsed subtrees.
     /// Materialized once whenever `comments` or `collapsed` changes, so drawing
@@ -139,6 +153,7 @@ impl App {
             client,
             tx,
             spawn,
+            opener: Box::new(util::open_in_browser),
             view: View::List,
             show_help: false,
             show_settings: false,
@@ -158,6 +173,9 @@ impl App {
             story: None,
             comments: Load::Loading,
             comment_state: ListState::default(),
+            comments_loaded: 0,
+            comments_truncated: false,
+            link_cursor: None,
             collapsed: HashSet::new(),
             visible: Vec::new(),
             comment_gen: 0,
@@ -261,6 +279,9 @@ impl App {
         self.comment_gen += 1;
         let seq = self.comment_gen;
         self.comments = Load::Loading;
+        self.comments_loaded = 0;
+        self.comments_truncated = false;
+        self.link_cursor = None;
         self.collapsed.clear();
         self.rebuild_visible();
         self.comment_state.select(Some(0));
@@ -269,8 +290,12 @@ impl App {
         let (client, kids, tx) = (self.client.clone(), story.kids.clone(), self.tx.clone());
         self.story = Some(story);
         (self.spawn)(Box::pin(async move {
-            let result = api::fetch_comments(client, kids, 250).await;
-            let _ = tx.send(Msg::Comments { seq, result });
+            let (result, truncated) = api::fetch_comments(client, kids, COMMENT_LIMIT).await;
+            let _ = tx.send(Msg::Comments {
+                seq,
+                result,
+                truncated,
+            });
         }));
     }
 
@@ -294,8 +319,14 @@ impl App {
                 }
                 self.resolve_pending_jump();
             }
-            Msg::Comments { seq, result } if seq == self.comment_gen => {
+            Msg::Comments {
+                seq,
+                result,
+                truncated,
+            } if seq == self.comment_gen => {
                 self.comment_state.select((!result.is_empty()).then_some(0));
+                self.comments_loaded = result.iter().map(|c| 1 + c.descendant_count()).sum();
+                self.comments_truncated = truncated;
                 self.comments = Load::Ready(result);
                 self.rebuild_visible();
             }
@@ -430,6 +461,7 @@ impl App {
             KeyCode::PageDown => self.move_comments(10),
             KeyCode::PageUp => self.move_comments(-10),
             KeyCode::Enter | KeyCode::Char(' ') => self.toggle_collapse(),
+            KeyCode::Char('u') => self.open_comment_link(),
             KeyCode::Char('o') => self.open_active(),
             KeyCode::Char('O') => self.open_discussion(),
             KeyCode::Char('s') => self.toggle_bookmark(),
@@ -839,9 +871,46 @@ impl App {
         }
     }
 
+    /// `u`: open a link from the selected comment. Pressing it again on the
+    /// same comment steps through its links in turn.
+    fn open_comment_link(&mut self) {
+        let Some(flat) = self
+            .comment_state
+            .selected()
+            .and_then(|i| self.visible.get(i))
+        else {
+            return;
+        };
+        let id = flat.id;
+        let links = match &self.comments {
+            Load::Ready(roots) => find_comment(roots, id).map(|c| c.links.clone()),
+            _ => None,
+        }
+        .unwrap_or_default();
+        if links.is_empty() {
+            self.toast("no links in this comment");
+            return;
+        }
+        let idx = match self.link_cursor {
+            Some((cid, next)) if cid == id => next % links.len(),
+            _ => 0,
+        };
+        self.link_cursor = Some((id, idx + 1));
+        self.open(&links[idx]);
+        if links.len() > 1 {
+            if let Some((msg, _)) = &mut self.toast {
+                msg.push_str(&format!(
+                    " · link {} of {} (u for next)",
+                    idx + 1,
+                    links.len()
+                ));
+            }
+        }
+    }
+
     fn open(&mut self, url: &str) {
         let label = util::domain(url).unwrap_or_else(|| "link".to_string());
-        if util::open_in_browser(url) {
+        if (self.opener)(url) {
             self.toast(format!("opened {label} in browser"));
         } else {
             self.toast(format!("couldn't open {label}"));
@@ -866,6 +935,15 @@ impl App {
     }
 }
 
+/// Depth-first search of a comment forest by id.
+fn find_comment(list: &[Comment], id: u64) -> Option<&Comment> {
+    list.iter().find_map(|c| {
+        (c.id == id)
+            .then_some(c)
+            .or_else(|| find_comment(&c.children, id))
+    })
+}
+
 /// Whether a story's title or domain contains `needle` (ASCII case-insensitive).
 fn story_matches(story: &Item, needle: &str) -> bool {
     util::contains_ci(&story.title, needle)
@@ -887,6 +965,8 @@ pub struct FlatComment {
     pub depth: usize,
     pub collapsed: bool,
     pub has_children: bool,
+    /// How many links the comment contains (for the badge; `u` opens them).
+    pub links: usize,
     /// Descendants hidden beneath this node when it is collapsed (for the badge).
     pub hidden: usize,
 }
@@ -907,6 +987,7 @@ fn flatten(list: &[Comment], collapsed: &HashSet<u64>, depth: usize, out: &mut V
             depth,
             collapsed: is_collapsed,
             has_children: !c.children.is_empty(),
+            links: c.links.len(),
             hidden: if is_collapsed {
                 c.descendant_count()
             } else {
@@ -958,6 +1039,7 @@ mod tests {
             by: "bob".into(),
             time: 0,
             text: "text".into(),
+            links: vec![],
             children: vec![],
         }
     }
@@ -1162,6 +1244,7 @@ mod tests {
         app.on_msg(Msg::Comments {
             seq,
             result: vec![leaf(10), leaf(11)],
+            truncated: false,
         });
         assert_eq!(app.visible_comments().len(), 2);
         assert_eq!(app.comment_state.selected(), Some(0));
@@ -1179,7 +1262,11 @@ mod tests {
             },
             leaf(4),
         ];
-        app.on_msg(Msg::Comments { seq, result: tree });
+        app.on_msg(Msg::Comments {
+            seq,
+            result: tree,
+            truncated: false,
+        });
         assert_eq!(app.visible_comments().len(), 4); // 1,2,3,4
 
         app.comment_state.select(Some(0)); // node 1 (has children)
@@ -1197,6 +1284,7 @@ mod tests {
         app.on_msg(Msg::Comments {
             seq,
             result: vec![leaf(1)],
+            truncated: false,
         });
         app.comment_state.select(Some(0));
         app.on_key(ch(' '));
@@ -1216,7 +1304,11 @@ mod tests {
             },
             leaf(4),
         ];
-        app.on_msg(Msg::Comments { seq, result: tree });
+        app.on_msg(Msg::Comments {
+            seq,
+            result: tree,
+            truncated: false,
+        });
 
         let v = app.visible_comments();
         assert_eq!(v.len(), 4);
@@ -1245,7 +1337,11 @@ mod tests {
             children: vec![leaf(2), leaf(3)],
             ..leaf(1)
         }];
-        app.on_msg(Msg::Comments { seq, result: tree });
+        app.on_msg(Msg::Comments {
+            seq,
+            result: tree,
+            truncated: false,
+        });
         app.comment_state.select(Some(0));
         app.on_key(ch(' ')); // collapse node 1
 
@@ -1275,6 +1371,7 @@ mod tests {
         app.on_msg(Msg::Comments {
             seq,
             result: vec![leaf(1), leaf(2), leaf(3)],
+            truncated: false,
         });
         app.on_key(key(KeyCode::End));
         assert_eq!(app.comment_state.selected(), Some(2));
@@ -1290,6 +1387,94 @@ mod tests {
         app.on_key(key(KeyCode::Esc));
         assert_eq!(app.view, View::List);
         assert!(!app.should_quit);
+    }
+
+    // ── opening links ──────────────────────────────────────────────────────────
+
+    /// Replace the browser launcher with one that records the URLs it is given.
+    fn record_opens(app: &mut App) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+        let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = opened.clone();
+        app.opener = Box::new(move |url| {
+            sink.lock().unwrap().push(url.to_string());
+            true
+        });
+        opened
+    }
+
+    #[test]
+    fn o_opens_the_article_and_shift_o_the_discussion() {
+        let (mut app, _rx) = loaded(40);
+        if let Load::Ready(stories) = &mut app.stories {
+            stories[0].url = Some("https://example.com/post".into());
+        }
+        let opened = record_opens(&mut app);
+        app.on_key(ch('o'));
+        app.on_key(ch('O'));
+        assert_eq!(
+            *opened.lock().unwrap(),
+            [
+                "https://example.com/post",
+                "https://news.ycombinator.com/item?id=1"
+            ]
+        );
+        assert!(app.visited.contains(&1));
+    }
+
+    #[test]
+    fn u_steps_through_a_comments_links() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(key(KeyCode::Enter));
+        let seq = app.comment_gen;
+        let mut linked = leaf(2);
+        linked.links = vec!["https://a.example".into(), "https://b.example".into()];
+        app.on_msg(Msg::Comments {
+            seq,
+            result: vec![leaf(1), linked],
+            truncated: false,
+        });
+        let opened = record_opens(&mut app);
+
+        app.on_key(ch('u')); // comment 1 has no links
+        assert!(opened.lock().unwrap().is_empty());
+        assert!(app.toast.as_ref().unwrap().0.contains("no links"));
+
+        app.on_key(ch('j'));
+        for _ in 0..3 {
+            app.on_key(ch('u'));
+        }
+        assert_eq!(
+            *opened.lock().unwrap(),
+            [
+                "https://a.example",
+                "https://b.example",
+                "https://a.example"
+            ] // wraps
+        );
+        assert_eq!(app.visible_comments()[1].links, 2);
+    }
+
+    #[test]
+    fn truncated_threads_are_reported() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(key(KeyCode::Enter));
+        let seq = app.comment_gen;
+        let tree = vec![Comment {
+            children: vec![leaf(2)],
+            ..leaf(1)
+        }];
+        app.on_msg(Msg::Comments {
+            seq,
+            result: tree,
+            truncated: true,
+        });
+        assert!(app.comments_truncated);
+        assert_eq!(app.comments_loaded, 2);
+
+        app.on_key(key(KeyCode::Esc));
+        app.on_key(key(KeyCode::Enter)); // reopening resets until loaded
+        assert!(!app.comments_truncated);
+        assert_eq!(app.comments_loaded, 0);
     }
 
     // ── help, quit, toasts ─────────────────────────────────────────────────────
@@ -1665,6 +1850,7 @@ mod tests {
         app.on_msg(Msg::Comments {
             seq,
             result: vec![leaf(1), c2, c3],
+            truncated: false,
         });
         app.on_key(ch('/'));
         typed(&mut app, "borrow");

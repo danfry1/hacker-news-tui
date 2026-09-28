@@ -3,7 +3,7 @@
 use futures::future::{BoxFuture, FutureExt, join_all};
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Semaphore;
 
 pub const BASE: &str = "https://hacker-news.firebaseio.com/v0";
@@ -118,6 +118,8 @@ pub struct Comment {
     pub by: String,
     pub time: u64,
     pub text: String,
+    /// `http(s)` links in the comment, from the raw HTML (see [`crate::util::extract_links`]).
+    pub links: Vec<String>,
     pub children: Vec<Comment>,
 }
 
@@ -185,38 +187,71 @@ async fn fetch_item_limited(
 
 /// Fetch a comment forest under `root_kids`, bounded to `max` total comments so
 /// even huge threads stay responsive, and to [`MAX_CONCURRENT`] in-flight requests.
-pub async fn fetch_comments(client: Client, root_kids: Vec<u64>, max: usize) -> Vec<Comment> {
+/// Also reports whether those bounds cut the thread short.
+pub async fn fetch_comments(
+    client: Client,
+    root_kids: Vec<u64>,
+    max: usize,
+) -> (Vec<Comment>, bool) {
     let remaining = AtomicUsize::new(max);
+    let truncated = AtomicBool::new(false);
     let sem = Semaphore::new(MAX_CONCURRENT);
-    build_forest(&client, root_kids, 0, &remaining, &sem).await
+    let limits = Limits {
+        remaining: &remaining,
+        truncated: &truncated,
+        sem: &sem,
+    };
+    let forest = build_forest(&client, root_kids, 0, limits).await;
+    (forest, truncated.load(Ordering::Relaxed))
+}
+
+/// Shared bounds for one comment-tree fetch.
+#[derive(Clone, Copy)]
+struct Limits<'a> {
+    /// Comments still allowed to be fetched.
+    remaining: &'a AtomicUsize,
+    /// Set when a depth or count bound skipped comments.
+    truncated: &'a AtomicBool,
+    sem: &'a Semaphore,
 }
 
 fn build_forest<'a>(
     client: &'a Client,
     ids: Vec<u64>,
     depth: usize,
-    remaining: &'a AtomicUsize,
-    sem: &'a Semaphore,
+    limits: Limits<'a>,
 ) -> BoxFuture<'a, Vec<Comment>> {
     async move {
-        if depth >= 12 || ids.is_empty() {
+        if ids.is_empty() {
             return Vec::new();
         }
+        if depth >= 12 {
+            limits.truncated.store(true, Ordering::Relaxed);
+            return Vec::new();
+        }
+        let remaining = limits.remaining;
         let take = ids.len().min(remaining.load(Ordering::Relaxed));
+        if take < ids.len() {
+            limits.truncated.store(true, Ordering::Relaxed);
+        }
         if take == 0 {
             return Vec::new();
         }
         remaining.fetch_sub(take, Ordering::Relaxed);
         let ids: Vec<u64> = ids.into_iter().take(take).collect();
 
-        let items = join_all(ids.iter().map(|&id| fetch_item_limited(client, sem, id))).await;
+        let items = join_all(
+            ids.iter()
+                .map(|&id| fetch_item_limited(client, limits.sem, id)),
+        )
+        .await;
         let nodes = join_all(items.into_iter().filter_map(|r| r.ok().flatten()).map(
             |item| async move {
                 if item.deleted || item.dead {
                     return None;
                 }
-                let children =
-                    build_forest(client, item.kids.clone(), depth + 1, remaining, sem).await;
+                let children = build_forest(client, item.kids.clone(), depth + 1, limits).await;
+                let html = item.text.as_deref().unwrap_or("");
                 Some(Comment {
                     id: item.id,
                     by: if item.by.is_empty() {
@@ -225,7 +260,8 @@ fn build_forest<'a>(
                         item.by
                     },
                     time: item.time,
-                    text: crate::util::clean_html(item.text.as_deref().unwrap_or("")),
+                    text: crate::util::clean_html(html),
+                    links: crate::util::extract_links(html),
                     children,
                 })
             },
@@ -298,6 +334,7 @@ mod tests {
             by: "x".into(),
             time: 0,
             text: String::new(),
+            links: vec![],
             children: vec![],
         };
         let tree = Comment {

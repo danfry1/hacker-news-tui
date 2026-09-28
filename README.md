@@ -116,6 +116,7 @@ attaches the archives to a GitHub Release for the tag.
 | `space` / `enter` | Collapse / expand a thread |
 | `/` + text, `n` / `N` | Search comment text and authors; next / previous match |
 | `o` / `O` | Open the article / the HN discussion page |
+| `u` | Open a link from the selected comment (press again for the next one) |
 | `s` | Bookmark / unbookmark |
 | `esc` / `h` / `←` | Back |
 
