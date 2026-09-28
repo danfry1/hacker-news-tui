@@ -5,7 +5,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -14,7 +15,7 @@ use crate::store::Settings;
 use crate::util;
 
 /// Number of toggles shown in the settings pane.
-pub const SETTINGS_COUNT: usize = 2;
+pub const SETTINGS_COUNT: usize = 3;
 
 /// A background unit of work handed to the spawner.
 type Task = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -130,6 +131,10 @@ pub struct App {
     comment_gen: u64,
     comments_origin: View,
 
+    /// Where the story or bookmark list was last drawn, for mapping clicks to
+    /// rows. Set by the renderer.
+    pub list_area: Rect,
+
     pub visited: HashSet<u64>,
     pub saved: Vec<Item>,
     pub bookmark_state: ListState,
@@ -184,6 +189,7 @@ impl App {
             visible: Vec::new(),
             comment_gen: 0,
             comments_origin: View::List,
+            list_area: Rect::default(),
             visited: HashSet::new(),
             saved: Vec::new(),
             bookmark_state: ListState::default(),
@@ -376,6 +382,57 @@ impl App {
         }
     }
 
+    /// Mouse input (only delivered while the mouse setting is on): the wheel
+    /// moves the selection; clicking a story selects it, and clicking the
+    /// selected story opens its comments.
+    pub fn on_mouse(&mut self, ev: MouseEvent) {
+        if !self.settings.mouse || self.show_help || self.show_settings || self.prompt.is_some() {
+            return;
+        }
+        let step: isize = match ev.kind {
+            MouseEventKind::ScrollDown => 1,
+            MouseEventKind::ScrollUp => -1,
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.click(ev.column, ev.row);
+                return;
+            }
+            _ => return,
+        };
+        self.pending_jump = None;
+        self.reselect = None;
+        match self.view {
+            View::List => self.move_list(step),
+            View::Comments => self.move_comments(step),
+            View::Bookmarks => self.move_bookmarks(step),
+        }
+    }
+
+    fn click(&mut self, column: u16, row: u16) {
+        let area = self.list_area;
+        let inside =
+            column >= area.x && column < area.right() && row >= area.y && row < area.bottom();
+        let state = match self.view {
+            View::List => &self.list_state,
+            View::Bookmarks => &self.bookmark_state,
+            View::Comments => return, // variable-height rows; use the keyboard
+        };
+        if !inside {
+            return;
+        }
+        // Story rows are two lines tall.
+        let idx = state.offset() + (row - area.y) as usize / 2;
+        if idx >= self.row_count() {
+            return;
+        }
+        if self.selected_row() == Some(idx) {
+            self.open_comments();
+        } else {
+            self.pending_jump = None;
+            self.reselect = None;
+            self.select_row(idx);
+        }
+    }
+
     fn on_key_settings(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char(',') | KeyCode::Char('q') => self.show_settings = false,
@@ -394,6 +451,7 @@ impl App {
         match self.settings_index {
             0 => self.settings.remember_read = !self.settings.remember_read,
             1 => self.settings.remember_bookmarks = !self.settings.remember_bookmarks,
+            2 => self.settings.mouse = !self.settings.mouse,
             _ => {}
         }
         self.dirty = true;
@@ -1994,6 +2052,81 @@ mod tests {
         assert_eq!(app.bookmark_state.selected(), Some(2));
     }
 
+    // ── mouse ──────────────────────────────────────────────────────────────────
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// Loaded feed with the mouse enabled and the list drawn at rows 1..29.
+    fn with_mouse() -> (App, UnboundedReceiver<Msg>) {
+        let (mut app, rx) = loaded(40);
+        app.settings.mouse = true;
+        app.list_area = Rect::new(0, 1, 80, 28);
+        (app, rx)
+    }
+
+    #[test]
+    fn wheel_moves_the_selection() {
+        let (mut app, _rx) = with_mouse();
+        app.on_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+        app.on_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+        assert_eq!(selected(&app), Some(2));
+        app.on_mouse(mouse(MouseEventKind::ScrollUp, 5, 5));
+        assert_eq!(selected(&app), Some(1));
+    }
+
+    #[test]
+    fn click_selects_then_opens() {
+        let (mut app, _rx) = with_mouse();
+        let left = MouseEventKind::Down(MouseButton::Left);
+        app.on_mouse(mouse(left, 10, 1 + 2 * 3 + 1)); // second line of row 3
+        assert_eq!(selected(&app), Some(3));
+        assert_eq!(app.view, View::List);
+        app.on_mouse(mouse(left, 10, 1 + 2 * 3));
+        assert_eq!(app.view, View::Comments);
+        assert_eq!(app.story.as_ref().unwrap().id, 4);
+    }
+
+    #[test]
+    fn clicks_outside_the_list_or_past_the_end_do_nothing() {
+        let (mut app, _rx) = with_mouse();
+        let left = MouseEventKind::Down(MouseButton::Left);
+        app.on_mouse(mouse(left, 10, 0)); // header
+        app.list_area = Rect::new(0, 1, 80, 100);
+        app.on_mouse(mouse(left, 10, 1 + 2 * 50)); // below the last story
+        assert_eq!(selected(&app), Some(0));
+        assert_eq!(app.view, View::List);
+    }
+
+    #[test]
+    fn mouse_is_ignored_while_disabled_or_under_an_overlay() {
+        let (mut app, _rx) = with_mouse();
+        app.settings.mouse = false;
+        app.on_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+        assert_eq!(selected(&app), Some(0));
+        app.settings.mouse = true;
+        app.on_key(ch('?'));
+        app.on_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+        assert_eq!(selected(&app), Some(0));
+    }
+
+    #[test]
+    fn mouse_setting_toggles_from_the_pane() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(ch(','));
+        app.on_key(ch('j'));
+        app.on_key(ch('j'));
+        app.on_key(ch(' '));
+        assert!(app.settings.mouse);
+        assert!(app.is_dirty());
+    }
+
     // ── persistence ────────────────────────────────────────────────────────────
 
     #[test]
@@ -2005,6 +2138,7 @@ mod tests {
             Settings {
                 remember_read: false,
                 remember_bookmarks: true,
+                ..Default::default()
             },
             read,
             items(&[100, 101]),

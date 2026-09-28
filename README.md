@@ -122,6 +122,10 @@ attaches the archives to a GitHub Release for the tag.
 
 ### Settings (`,`) & Bookmarks (`b`)
 In the settings pane, `j`/`k` move, `space`/`enter` toggle, `,`/`esc` close.
+Mouse support (wheel scrolling; click a story to select it, click again to open
+its comments) is off by default and can be enabled there. Capturing the mouse
+takes over the terminal's own click-and-drag text selection; most terminals
+bypass it while a modifier (usually `shift`) is held.
 In the bookmarks view, `enter` opens comments, `o` opens the article, `s`
 removes a bookmark, and `b`/`esc` returns to the feed. `:` jumps and `/`
 searches there too.

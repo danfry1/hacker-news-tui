@@ -9,7 +9,8 @@ mod util;
 
 use std::time::Duration;
 
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind};
+use crossterm::execute;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
@@ -72,10 +73,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let colors = color::ColorMode::from_env();
     let mut terminal = ratatui::init();
+    // `ratatui::init` restores the terminal on panic, but doesn't know about
+    // mouse capture; release it too so a crash can't leave the shell spewing
+    // mouse escape codes.
+    let restore_on_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        restore_on_panic(info);
+    }));
+    let mut mouse_captured = false;
     let mut events = EventStream::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(120));
 
     let result = loop {
+        // Follow the mouse setting, which can be toggled at runtime.
+        if app.settings.mouse != mouse_captured {
+            mouse_captured = app.settings.mouse;
+            let _ = if mouse_captured {
+                execute!(std::io::stdout(), EnableMouseCapture)
+            } else {
+                execute!(std::io::stdout(), DisableMouseCapture)
+            };
+        }
+
         if let Err(e) = terminal.draw(|frame| ui::draw(frame, &mut app, colors)) {
             break Err(e.into());
         }
@@ -83,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             maybe_event = events.next() => match maybe_event {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => app.on_key(key),
+                Some(Ok(Event::Mouse(ev))) => app.on_mouse(ev),
                 Some(Ok(_)) => {}            // resize, mouse, focus — redraw on next loop
                 Some(Err(e)) => break Err(e.into()),
                 None => break Ok(()),        // input stream closed
@@ -104,6 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    if mouse_captured {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
     ratatui::restore();
     result
 }

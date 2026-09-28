@@ -165,6 +165,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let items = mark_selected(items, app.list_state.selected());
     let list = story_list(items);
     frame.render_stateful_widget(list, area, &mut app.list_state);
+    app.list_area = area;
 }
 
 // ── bookmarks ────────────────────────────────────────────────────────────────
@@ -193,6 +194,7 @@ fn draw_bookmarks(frame: &mut Frame, app: &mut App, area: Rect) {
     let items = mark_selected(items, app.bookmark_state.selected());
     let list = story_list(items);
     frame.render_stateful_widget(list, area, &mut app.bookmark_state);
+    app.list_area = area;
 }
 
 /// Column layout shared by every row of a story list.
@@ -727,12 +729,13 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 const DIM_STYLE: Style = Style::new().fg(DIM);
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
-    let popup = centered(54, 11, area);
+    let popup = centered(54, 12, area);
     frame.render_widget(Clear, popup);
 
     let toggles: [(&str, bool); SETTINGS_COUNT] = [
         ("Remember read stories", app.settings.remember_read),
         ("Remember bookmarks", app.settings.remember_bookmarks),
+        ("Mouse: wheel scrolls, click selects", app.settings.mouse),
     ];
 
     let mut lines = vec![Line::from("")];
@@ -762,7 +765,11 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  data is written to disk only while enabled",
+        "  nothing is written to disk until a setting is on",
+        DIM_STYLE,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  mouse on: to select text, hold shift (varies)",
         DIM_STYLE,
     )));
     lines.push(Line::from(""));
