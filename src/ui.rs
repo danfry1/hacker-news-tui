@@ -153,6 +153,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
+    let items = mark_selected(items, app.list_state.selected());
     let list = story_list(items);
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -180,6 +181,7 @@ fn draw_bookmarks(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
+    let items = mark_selected(items, app.bookmark_state.selected());
     let list = story_list(items);
     frame.render_stateful_widget(list, area, &mut app.bookmark_state);
 }
@@ -236,9 +238,25 @@ fn story_row(
     ListItem::new(Text::from(vec![Line::from(title_spans), meta]))
 }
 
+/// Give the selected row its background as the item's own base style. The
+/// list's `highlight_style` would be patched over the spans instead, hiding
+/// any background they set (search hits), so it is left empty.
+fn mark_selected(items: Vec<ListItem<'_>>, selected: Option<usize>) -> Vec<ListItem<'_>> {
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(i, item)| {
+            if Some(i) == selected {
+                item.style(Style::default().bg(SELECT_BG))
+            } else {
+                item
+            }
+        })
+        .collect()
+}
+
 fn story_list(items: Vec<ListItem<'static>>) -> List<'static> {
     List::new(items)
-        .highlight_style(Style::default().bg(SELECT_BG))
         .highlight_symbol("▌")
         .highlight_spacing(ratatui::widgets::HighlightSpacing::Always)
 }
@@ -334,8 +352,8 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
+    let items = mark_selected(items, app.comment_state.selected());
     let list = List::new(items)
-        .highlight_style(Style::default().bg(SELECT_BG))
         .highlight_symbol("▌")
         .highlight_spacing(ratatui::widgets::HighlightSpacing::Always);
 
