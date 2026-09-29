@@ -30,6 +30,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Discussions longer than the loading limit (250 comments) now say so, e.g.
   "showing the first 250 of 1,204 comments", and point to `O` for the full
   thread, instead of silently showing part of it.
+- Optional mouse support, enabled in the settings pane (`,`): the wheel moves
+  the selection, clicking a story selects it, and clicking it again opens its
+  comments. It is off by default, since capturing the mouse takes over the
+  terminal's own text selection. Changing a preference like this is saved on
+  its own, without enabling any data persistence.
 
 ### Changed
 

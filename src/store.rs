@@ -4,7 +4,8 @@
 //!
 //! Read-state and bookmarks are only written when the user has enabled them in
 //! the in-app settings pane, and the settings are saved alongside them. With
-//! everything disabled nothing is written, and any existing file is removed.
+//! every setting at its default nothing is written, and any existing file is
+//! removed.
 //!
 //! Writes are atomic (a temporary file renamed over the original), so an
 //! interrupted save can never leave a truncated file that would load as empty
@@ -30,6 +31,10 @@ pub struct Settings {
     pub remember_read: bool,
     #[serde(default)]
     pub remember_bookmarks: bool,
+    /// Capture the mouse for wheel scrolling and click-to-select. Off by
+    /// default: capturing stops the terminal's own click-and-drag selection.
+    #[serde(default)]
+    pub mouse: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -70,9 +75,10 @@ pub fn save(settings: &Settings, read: &HashSet<u64>, saved: &[Item]) {
     }
 }
 
-/// What to persist for the given state, or `None` when persistence is off.
+/// What to persist for the given state, or `None` when every setting is at
+/// its default (nothing to remember, not even a preference).
 fn snapshot(settings: &Settings, read: &HashSet<u64>, saved: &[Item]) -> Option<Store> {
-    if !settings.remember_read && !settings.remember_bookmarks {
+    if *settings == Settings::default() {
         return None;
     }
     let read = if settings.remember_read {
@@ -157,7 +163,20 @@ mod tests {
         Settings {
             remember_read: read,
             remember_bookmarks: bookmarks,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_changed_preference_is_saved_without_any_data() {
+        let settings = Settings {
+            mouse: true,
+            ..Default::default()
+        };
+        let s = snapshot(&settings, &HashSet::from([1]), &[Item::default()]).unwrap();
+        assert!(s.settings.mouse);
+        assert!(s.read.is_empty());
+        assert!(s.saved.is_empty());
     }
 
     #[test]
@@ -203,6 +222,7 @@ mod tests {
             settings: Settings {
                 remember_read: false,
                 remember_bookmarks: true,
+                mouse: true,
             },
             read: vec![10, 20],
             saved: vec![Item {
