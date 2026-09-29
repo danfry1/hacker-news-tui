@@ -382,6 +382,7 @@ impl App {
             KeyCode::PageUp => self.move_list(-10),
             KeyCode::Enter => self.open_comments(),
             KeyCode::Char('o') => self.open_active(),
+            KeyCode::Char('O') => self.open_discussion(),
             KeyCode::Char('s') => self.toggle_bookmark(),
             KeyCode::Char('b') => {
                 self.view = View::Bookmarks;
@@ -430,6 +431,7 @@ impl App {
             KeyCode::PageUp => self.move_comments(-10),
             KeyCode::Enter | KeyCode::Char(' ') => self.toggle_collapse(),
             KeyCode::Char('o') => self.open_active(),
+            KeyCode::Char('O') => self.open_discussion(),
             KeyCode::Char('s') => self.toggle_bookmark(),
             _ => {}
         }
@@ -455,6 +457,7 @@ impl App {
             KeyCode::PageUp => self.move_bookmarks(-10),
             KeyCode::Enter => self.open_comments(),
             KeyCode::Char('o') => self.open_active(),
+            KeyCode::Char('O') => self.open_discussion(),
             KeyCode::Char('s') => self.toggle_bookmark(),
             _ => {}
         }
@@ -825,6 +828,14 @@ impl App {
         if let Some(story) = self.active_story() {
             self.mark_visited(story.id);
             self.open(&story.target_url());
+        }
+    }
+
+    /// Open the story's Hacker News discussion page, whatever it links to.
+    fn open_discussion(&mut self) {
+        if let Some(story) = self.active_story() {
+            self.mark_visited(story.id);
+            self.open(&story.hn_url());
         }
     }
 

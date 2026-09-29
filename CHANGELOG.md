@@ -16,6 +16,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   matches are highlighted. In the feed and bookmarks it searches titles and
   domains; in a discussion it searches comment text and authors. Thanks to
   @csabaxyz for suggesting this (#13).
+- `O` opens a story's Hacker News discussion page in the browser (from the
+  feed, bookmarks, or an open discussion), whatever the story links to.
+
+### Fixed
+
+- Centered status messages ("fetching stories…", load errors, empty views)
+  could be invisible, depending on the terminal height, because they were
+  squeezed into a zero-height area. They now always render, and multi-line
+  load errors show their details along with a "press r to retry" hint.
+- Story numbers of 100 and above no longer shift their titles out of
+  alignment with the rest of the list.
+- Long titles are truncated to leave room for the `(domain)` suffix instead of
+  pushing it off-screen; the domain is dropped only when the row is too narrow
+  to show a readable title beside it.
+- On narrow terminals, the footer drops lower-priority key hints instead of
+  running off the edge (`? help` and `q quit` are always shown), and the
+  header drops its "Hacker News" label rather than colliding with the
+  loading/live status.
 
 ### Security
 

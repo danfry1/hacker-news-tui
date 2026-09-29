@@ -96,8 +96,6 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         saved_style,
     ));
 
-    let line = Line::from(spans);
-
     // Right-aligned spinner / status.
     let right = if app.is_loading() {
         Line::from(vec![
@@ -107,6 +105,14 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Line::from(Span::styled("● live ", Style::default().fg(Color::Green)))
     };
+
+    // On narrow terminals, drop the "Hacker News" label rather than let the
+    // tabs run into the status on the right.
+    let used: usize = spans.iter().map(|s| s.width()).sum();
+    if used + right.width() > area.width as usize {
+        spans.remove(1);
+    }
+    let line = Line::from(spans);
 
     frame.render_widget(Paragraph::new(line), area);
     frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), area);
@@ -128,7 +134,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
             return draw_center(
                 frame,
                 area,
-                &format!("couldn't load stories\n{e}"),
+                &format!("couldn't load stories\n{e}\n\npress r to retry"),
                 Color::Red,
             );
         }
@@ -136,8 +142,8 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         Load::Ready(s) => s,
     };
 
-    let width = area.width.saturating_sub(6) as usize;
     let query = app.highlight_query();
+    let cols = RowCols::new(stories.len(), area.width);
     let items: Vec<ListItem> = stories
         .iter()
         .enumerate()
@@ -147,7 +153,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 story,
                 app.visited.contains(&story.id),
                 app.is_saved(story.id),
-                width,
+                cols,
                 query,
             )
         })
@@ -170,14 +176,14 @@ fn draw_bookmarks(frame: &mut Frame, app: &mut App, area: Rect) {
         );
     }
 
-    let width = area.width.saturating_sub(6) as usize;
+    let cols = RowCols::new(app.saved.len(), area.width);
     let items: Vec<ListItem> = app
         .saved
         .iter()
         .enumerate()
         .map(|(i, story)| {
             let read = app.visited.contains(&story.id);
-            story_row(i, story, read, true, width, app.highlight_query())
+            story_row(i, story, read, true, cols, app.highlight_query())
         })
         .collect();
 
@@ -186,13 +192,31 @@ fn draw_bookmarks(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.bookmark_state);
 }
 
+/// Column layout shared by every row of a story list.
+#[derive(Clone, Copy)]
+struct RowCols {
+    /// Digits in the largest row number, so `9.` and `120.` line up.
+    num: usize,
+    /// Room left for the title.
+    title: usize,
+}
+
+impl RowCols {
+    fn new(rows: usize, area_width: u16) -> Self {
+        let num = rows.to_string().len().max(2);
+        // highlight symbol + number + ". " + a little breathing room
+        let title = (area_width as usize).saturating_sub(num + 4);
+        RowCols { num, title }
+    }
+}
+
 /// A single two-line story row, shared by the feed list and the bookmarks view.
 fn story_row(
     i: usize,
     story: &Item,
     read: bool,
     saved: bool,
-    width: usize,
+    cols: RowCols,
     query: Option<&str>,
 ) -> ListItem<'static> {
     let title_style = if read {
@@ -204,25 +228,31 @@ fn story_row(
     };
 
     let mut title_spans = vec![Span::styled(
-        format!("{:>2}. ", i + 1),
+        format!("{:>w$}. ", i + 1, w = cols.num),
         Style::default().fg(ORANGE),
     )];
     if saved {
         title_spans.push(Span::styled("★ ", Style::default().fg(ORANGE)));
     }
+    let budget = cols.title.saturating_sub(if saved { 2 } else { 0 });
+    let (title_width, domain) = fit_title(
+        story.title.chars().count(),
+        story.url.as_deref().and_then(util::domain),
+        budget,
+    );
     title_spans.extend(highlighted(
-        &truncate(&story.title, width),
+        &truncate(&story.title, title_width),
         query,
         title_style,
     ));
-    if let Some(dom) = story.url.as_deref().and_then(util::domain) {
+    if let Some(dom) = domain {
         title_spans.push(Span::styled("  (", Style::default().fg(FAINT)));
         title_spans.extend(highlighted(&dom, query, Style::default().fg(FAINT)));
         title_spans.push(Span::styled(")", Style::default().fg(FAINT)));
     }
 
     let meta = Line::from(vec![
-        Span::raw("    "),
+        Span::raw(" ".repeat(cols.num + 2)),
         Span::styled(format!("▲ {}", story.score), Style::default().fg(ORANGE)),
         Span::styled(format!("  by {}", story.by), Style::default().fg(DIM)),
         Span::styled(
@@ -253,6 +283,23 @@ fn mark_selected(items: Vec<ListItem<'_>>, selected: Option<usize>) -> Vec<ListI
             }
         })
         .collect()
+}
+
+/// Split a row's `budget` between the title and its `  (domain)` suffix,
+/// returning the width to truncate the title to and the domain to show. The
+/// title gets priority: the domain is dropped when keeping it would squeeze
+/// the title below a readable length.
+fn fit_title(title: usize, domain: Option<String>, budget: usize) -> (usize, Option<String>) {
+    const MIN_TITLE: usize = 24;
+    let Some(dom) = domain else {
+        return (budget, None);
+    };
+    let suffix = dom.chars().count() + 4; // "  (" + ")"
+    if title + suffix <= budget || budget >= suffix + MIN_TITLE {
+        (budget.saturating_sub(suffix), Some(dom))
+    } else {
+        (budget, None)
+    }
 }
 
 fn story_list(items: Vec<ListItem<'static>>) -> List<'static> {
@@ -527,38 +574,40 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // Most important first: when the terminal is too narrow for all of them,
+    // hints are dropped from the end, but `? help` and `q quit` always stay.
     let hints: &[(&str, &str)] = match app.view {
         View::List => &[
             ("j/k", "move"),
             ("enter", "comments"),
             ("o", "open"),
+            ("/", "search"),
+            ("tab", "feed"),
             ("s", "save"),
             ("b", "saved"),
-            ("tab", "feed"),
+            (":", "jump"),
+            ("O", "discussion"),
             (",", "settings"),
-            ("?", "help"),
-            ("q", "quit"),
         ],
         View::Comments => &[
             ("j/k", "move"),
             ("space", "collapse"),
-            ("/", "search"),
-            ("o", "article"),
-            ("s", "save"),
             ("esc", "back"),
-            ("?", "help"),
-            ("q", "quit"),
+            ("o", "article"),
+            ("/", "search"),
+            ("s", "save"),
+            ("O", "discussion"),
         ],
         View::Bookmarks => &[
             ("j/k", "move"),
             ("enter", "comments"),
             ("o", "open"),
-            ("s", "unsave"),
             ("b/esc", "back"),
-            ("?", "help"),
-            ("q", "quit"),
+            ("s", "unsave"),
+            ("/", "search"),
         ],
     };
+    let hints = fit_hints(hints, &[("?", "help"), ("q", "quit")], area.width);
 
     let mut spans = vec![Span::raw(" ")];
     for (i, (key, desc)) in hints.iter().enumerate() {
@@ -575,10 +624,34 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// Display width of a hint row laid out as ` key desc  key desc…`.
+fn hints_width(hints: &[(&str, &str)]) -> usize {
+    let items: usize = hints
+        .iter()
+        .map(|(k, d)| k.chars().count() + 1 + d.chars().count())
+        .sum();
+    1 + items + 2 * hints.len().saturating_sub(1)
+}
+
+/// The longest prefix of `optional` that fits in `width` alongside `always`.
+fn fit_hints<'a>(
+    optional: &[(&'a str, &'a str)],
+    always: &[(&'a str, &'a str)],
+    width: u16,
+) -> Vec<(&'a str, &'a str)> {
+    let mut kept: Vec<_> = optional.iter().chain(always).copied().collect();
+    let mut n = optional.len();
+    while n > 0 && hints_width(&kept) > width as usize {
+        n -= 1;
+        kept.remove(n);
+    }
+    kept
+}
+
 // ── overlays ─────────────────────────────────────────────────────────────────
 
 fn draw_help(frame: &mut Frame, area: Rect) {
-    let popup = centered(58, 20, area);
+    let popup = centered(58, 21, area);
     frame.render_widget(Clear, popup);
 
     let key = Style::default().fg(ORANGE).add_modifier(Modifier::BOLD);
@@ -599,7 +672,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         row(":10", "jump to story 10"),
         row("/ · n / N", "search titles · next / previous"),
         row("enter", "open comments"),
-        row("o", "open article in browser"),
+        row("o / O", "open article / HN discussion"),
         row("s / b", "save / view bookmarks"),
         row("1–6 / tab", "switch feed"),
         row("r  /  ,", "refresh / settings"),
@@ -607,7 +680,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled("  Comments", head)),
         row("space / enter", "collapse / expand"),
         row("/ · n / N", "search comments · next / previous"),
-        row("o  /  s", "open article / save"),
+        row("o / O", "open article / HN discussion"),
+        row("s", "save / unsave the story"),
         row("esc / h", "back"),
         Line::from(""),
         Line::from(Span::styled("  q  quit      ?  close this help", DIM_STYLE)),
@@ -690,16 +764,28 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/// Render a (possibly multi-line) message centered both ways in `area`.
 fn draw_center(frame: &mut Frame, area: Rect, msg: &str, color: Color) {
-    let para = Paragraph::new(msg.to_string())
-        .style(Style::default().fg(color))
-        .alignment(Alignment::Center)
-        .wrap(Wrap { trim: true });
     let inner = area.inner(Margin {
         horizontal: 2,
-        vertical: area.height / 2,
+        vertical: 0,
     });
-    frame.render_widget(para, inner);
+    // Wrap up front so the block's height is known and it can be centered
+    // vertically, rather than squeezing the paragraph into a fixed-size slot.
+    let lines: Vec<Line> = util::wrap(msg, inner.width as usize)
+        .into_iter()
+        .map(Line::from)
+        .collect();
+    let height = (lines.len() as u16).min(inner.height);
+    let slot = Rect {
+        y: inner.y + (inner.height - height) / 2,
+        height,
+        ..inner
+    };
+    let para = Paragraph::new(lines)
+        .style(Style::default().fg(color))
+        .alignment(Alignment::Center);
+    frame.render_widget(para, slot);
 }
 
 fn centered(w: u16, h: u16, area: Rect) -> Rect {
@@ -742,5 +828,74 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         let kept: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{kept}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn render(w: u16, h: u16, msg: &str) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| draw_center(f, f.area(), msg, Color::Red))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn centered_message_shows_at_even_and_odd_heights() {
+        for h in [10, 11] {
+            let rows = render(40, h, "first line\nsecond line");
+            let first = rows.iter().position(|r| r.contains("first line"));
+            let second = rows.iter().position(|r| r.contains("second line"));
+            assert!(first.is_some(), "height {h}: first line missing");
+            assert_eq!(second, first.map(|y| y + 1), "height {h}");
+            // Roughly vertically centered.
+            assert!((h as usize / 2).abs_diff(first.unwrap()) <= 1);
+        }
+    }
+
+    #[test]
+    fn fit_hints_drops_optional_from_the_end_but_keeps_always() {
+        let optional = [("j/k", "move"), ("enter", "comments"), ("o", "open")];
+        let always = [("?", "help"), ("q", "quit")];
+        let all = fit_hints(&optional, &always, 200);
+        assert_eq!(all.len(), 5);
+        assert_eq!(
+            hints_width(&all),
+            " j/k move  enter comments  o open  ? help  q quit".len()
+        );
+
+        let narrow = fit_hints(&optional, &always, 30);
+        assert_eq!(narrow, [("j/k", "move"), ("?", "help"), ("q", "quit")]);
+        assert!(hints_width(&narrow) <= 30);
+
+        let tiny = fit_hints(&optional, &always, 5);
+        assert_eq!(tiny, always); // never drops the essentials
+    }
+
+    #[test]
+    fn title_and_domain_share_the_row() {
+        let dom = || Some("example.com".to_string()); // suffix is 15 wide
+        // Plenty of room: both shown, title not truncated.
+        assert_eq!(fit_title(20, dom(), 80), (65, dom()));
+        // Long title: truncated to leave room for the domain.
+        assert_eq!(fit_title(100, dom(), 60), (45, dom()));
+        // Too tight to keep a readable title alongside the domain: drop it.
+        assert_eq!(fit_title(100, dom(), 30), (30, None));
+        assert_eq!(fit_title(100, None, 30), (30, None));
+    }
+
+    #[test]
+    fn row_number_column_grows_with_the_list() {
+        assert_eq!(RowCols::new(9, 80).num, 2);
+        assert_eq!(RowCols::new(99, 80).num, 2);
+        assert_eq!(RowCols::new(120, 80).num, 3);
     }
 }

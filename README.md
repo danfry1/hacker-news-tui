@@ -100,6 +100,7 @@ attaches the archives to a GitHub Release for the tag.
 | `n` / `N` | Next / previous search match (wraps around) |
 | `enter` | Open comments |
 | `o` | Open the article in your browser |
+| `O` | Open the Hacker News discussion page in your browser |
 | `s` | Bookmark / unbookmark the story |
 | `b` | View bookmarks (`★ Saved`) |
 | `1`–`6`, `tab` / `shift+tab` | Switch feed |
@@ -114,7 +115,7 @@ attaches the archives to a GitHub Release for the tag.
 | `j` / `k`, `↑` / `↓` | Move selection |
 | `space` / `enter` | Collapse / expand a thread |
 | `/` + text, `n` / `N` | Search comment text and authors; next / previous match |
-| `o` | Open the article |
+| `o` / `O` | Open the article / the HN discussion page |
 | `s` | Bookmark / unbookmark |
 | `esc` / `h` / `←` | Back |
 
