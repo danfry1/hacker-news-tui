@@ -65,6 +65,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- On Windows, links were opened with `cmd /C start`, so a URL containing `&`
+  (for example in a story's link, or a crafted query string) could end the
+  command and run arbitrary commands. Links are now opened through the
+  system's URL protocol handler with no command-line parsing, and on every
+  platform only `http(s)` links are opened, with characters that are invalid
+  in URLs but meaningful to shells percent-encoded first.
 - Update `ratatui` to 0.30 (and `crossterm` to 0.29). This drops the
   transitive `lru` 0.12 (RUSTSEC-2026-0002, RUSTSEC-2026-0253, unsound) and
   the unmaintained `paste` (RUSTSEC-2024-0436), leaving `cargo audit` with no

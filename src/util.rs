@@ -186,15 +186,50 @@ pub fn contains_ci(haystack: &str, needle: &str) -> bool {
 /// The browser is chosen, in order, from `$HN_TUI_BROWSER` (app-specific, so it
 /// can be exported globally without touching the system default), the standard
 /// `$BROWSER`, and finally the OS default opener. A value may include arguments
-/// (e.g. `firefox --new-window`). The URL is always passed as a discrete
-/// argument — never through a shell — so a hostile URL can't smuggle in extra
-/// commands. Returns whether the browser process was spawned successfully.
+/// (e.g. `firefox --new-window`).
+///
+/// URLs come from story submitters and commenters, so they are treated as
+/// hostile: only `http(s)` links are opened, the URL is normalized by
+/// [`safe_url`] so it contains nothing a command line could interpret, and it
+/// is always passed as a discrete argument — never through a shell. Returns
+/// whether the browser process was spawned successfully.
 pub fn open_in_browser(url: &str) -> bool {
-    let from_env = browser_spec().and_then(|b| build_command(&b, url));
-    match from_env.or_else(|| browser_command(url)) {
+    let Some(url) = safe_url(url) else {
+        return false;
+    };
+    let from_env = browser_spec().and_then(|b| build_command(&b, &url));
+    match from_env.or_else(|| browser_command(&url)) {
         Some(mut c) => c.spawn().is_ok(),
         None => false,
     }
+}
+
+/// `url` made safe to hand to another program, or `None` if it isn't an
+/// `http(s)` link. Whitespace, control and non-ASCII bytes, and the characters
+/// that are invalid in URLs but meaningful to shells (`"`, `<`, `>`, `\`, `^`,
+/// `` ` ``, `{`, `|`, `}`) are percent-encoded, which browsers treat as
+/// equivalent. URL syntax such as `&`, `%`, `?` and `#` is left intact.
+pub fn safe_url(url: &str) -> Option<String> {
+    let scheme_ok = ["https://", "http://"].iter().any(|scheme| {
+        url.get(..scheme.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(scheme))
+    });
+    if !scheme_ok {
+        return None;
+    }
+    let mut out = String::with_capacity(url.len());
+    for b in url.bytes() {
+        let unsafe_char = matches!(
+            b,
+            b'"' | b'<' | b'>' | b'\\' | b'^' | b'`' | b'{' | b'|' | b'}'
+        );
+        if b.is_ascii_graphic() && !unsafe_char {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    Some(out)
 }
 
 /// The first non-empty browser command from the environment, preferring the
@@ -226,9 +261,19 @@ fn browser_command(url: &str) -> Option<std::process::Command> {
 
 #[cfg(target_os = "windows")]
 fn browser_command(url: &str) -> Option<std::process::Command> {
-    let mut c = std::process::Command::new("cmd");
-    c.args(["/C", "start", "", url]);
-    Some(c)
+    Some(windows_command(url))
+}
+
+/// Windows' default-browser launcher. This deliberately avoids
+/// `cmd /C start`: cmd.exe re-parses its command line, so an `&` in a URL's
+/// query would end the `start` command and run the rest as a new one.
+/// `url.dll`'s protocol handler hands the URL straight to the shell's
+/// registered browser with no command-line parsing.
+#[cfg(any(target_os = "windows", test))]
+fn windows_command(url: &str) -> std::process::Command {
+    let mut c = std::process::Command::new("rundll32.exe");
+    c.args(["url.dll,FileProtocolHandler", url]);
+    c
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -311,6 +356,41 @@ mod tests {
         assert_eq!(c.get_program(), "firefox");
         let args: Vec<_> = c.get_args().collect();
         assert_eq!(args, ["--new-window", "https://example.com"]);
+    }
+
+    #[test]
+    fn only_web_urls_are_opened() {
+        assert!(safe_url("https://example.com").is_some());
+        assert!(safe_url("HTTP://EXAMPLE.COM").is_some());
+        assert!(safe_url("file:///etc/passwd").is_none());
+        assert!(safe_url("javascript:alert(1)").is_none());
+        assert!(safe_url("calc.exe").is_none());
+        assert!(safe_url("").is_none());
+    }
+
+    #[test]
+    fn urls_are_normalized_for_the_command_line() {
+        // URL syntax, including `&` and existing escapes, is kept.
+        let q = "https://x.com/a?b=1&c=%20d#e";
+        assert_eq!(safe_url(q).unwrap(), q);
+        // Quotes, spaces, shell metacharacters and non-ASCII are encoded.
+        assert_eq!(
+            safe_url("https://x.com/\"a b\"|^<>`{}\\é").unwrap(),
+            "https://x.com/%22a%20b%22%7C%5E%3C%3E%60%7B%7D%5C%C3%A9"
+        );
+        assert_eq!(
+            safe_url("https://x.com/\n&whoami").unwrap(),
+            "https://x.com/%0A&whoami"
+        );
+    }
+
+    #[test]
+    fn windows_opener_does_not_go_through_cmd() {
+        let url = "https://x.com/?a=1&calc.exe";
+        let c = windows_command(url);
+        assert_eq!(c.get_program(), "rundll32.exe");
+        let args: Vec<_> = c.get_args().collect();
+        assert_eq!(args, ["url.dll,FileProtocolHandler", url]);
     }
 
     #[test]

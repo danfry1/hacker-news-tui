@@ -46,6 +46,30 @@ jobs:
       - name: Test
         run: cargo test --all
 
+  # The release ships macOS and Windows binaries, and some code (opening a
+  # browser, atomic file replacement) is platform-specific, so the test suite
+  # runs there too.
+  test-platforms:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Test
+        run: cargo test --all
+
   audit:
     name: security audit
     runs-on: ubuntu-latest
