@@ -23,6 +23,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   standard 256 instead of rendering incorrectly. `NO_COLOR` is honored, with
   the selection and search matches shown in reverse video. `HN_TUI_COLOR`
   (`truecolor`, `256`, or `none`) overrides detection.
+- `u` opens links from the selected comment, stepping through them on repeat
+  presses. Links are taken from the comment's HTML, so URLs that Hacker News
+  abbreviates in the text still open in full. Comments with links show a
+  `↗ N links` badge.
+- Discussions longer than the loading limit (250 comments) now say so, e.g.
+  "showing the first 250 of 1,204 comments", and point to `O` for the full
+  thread, instead of silently showing part of it.
 
 ### Fixed
 

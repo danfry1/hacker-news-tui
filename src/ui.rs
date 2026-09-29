@@ -381,6 +381,13 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!("  {}", util::time_ago(flat.time)),
                 Style::default().fg(FAINT),
             ));
+            if flat.links > 0 && !flat.collapsed {
+                let label = if flat.links == 1 { "link" } else { "links" };
+                head.push(Span::styled(
+                    format!("  ↗ {} {label}", flat.links),
+                    Style::default().fg(ACCENT),
+                ));
+            }
             if flat.collapsed {
                 head.push(Span::styled(
                     format!("  [+{} hidden]", flat.hidden),
@@ -441,6 +448,17 @@ fn story_header_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         ));
     }
     lines.push(Line::from(meta));
+
+    if app.comments_truncated {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "showing the first {} of {} comments · O opens the full thread on HN",
+                app.comments_loaded,
+                story.comment_count()
+            ),
+            Style::default().fg(ORANGE),
+        )));
+    }
 
     // Self/Ask post body, if any.
     if let Some(text) = &story.text {
@@ -597,6 +615,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             ("space", "collapse"),
             ("esc", "back"),
             ("o", "article"),
+            ("u", "links"),
             ("/", "search"),
             ("s", "save"),
             ("O", "discussion"),
@@ -654,7 +673,7 @@ fn fit_hints<'a>(
 // ── overlays ─────────────────────────────────────────────────────────────────
 
 fn draw_help(frame: &mut Frame, area: Rect) {
-    let popup = centered(58, 21, area);
+    let popup = centered(58, 22, area);
     frame.render_widget(Clear, popup);
 
     let key = Style::default().fg(ORANGE).add_modifier(Modifier::BOLD);
@@ -684,6 +703,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         row("space / enter", "collapse / expand"),
         row("/ · n / N", "search comments · next / previous"),
         row("o / O", "open article / HN discussion"),
+        row("u", "open links in the comment"),
         row("s", "save / unsave the story"),
         row("esc / h", "back"),
         Line::from(""),
