@@ -583,6 +583,31 @@ fn refresh_falls_back_to_top_when_story_left_the_feed() {
 }
 
 #[test]
+fn refresh_gives_up_on_a_story_filtered_out_of_the_first_page() {
+    let (mut app, _rx) = loaded(40);
+    app.on_key(ch('j')); // story id 2
+    app.on_key(ch('r'));
+    let seq = app.story_gen;
+    // Still ranked in the first page, but dead, so not among the items.
+    app.on_msg(Msg::Stories {
+        seq,
+        result: Ok((vec![1, 2, 3], items(&[1, 3]))),
+    });
+    assert_eq!(selected(&app), Some(0));
+    assert_eq!(app.pending_jump, None);
+    assert_eq!(app.reselect, None);
+}
+
+#[test]
+fn overflowing_jump_goes_to_the_end() {
+    let (mut app, _rx) = loaded(15);
+    app.on_key(ch(':'));
+    typed(&mut app, "99999999999999999999999");
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(selected(&app), Some(14));
+}
+
+#[test]
 fn switching_feeds_does_not_reselect() {
     let (mut app, _rx) = loaded(40);
     app.on_key(ch('j'));

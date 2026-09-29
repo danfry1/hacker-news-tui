@@ -101,14 +101,20 @@ fn snapshot(settings: &Settings, read: &HashSet<u64>, saved: &[Item]) -> Option<
     })
 }
 
-/// Replace `path` with `bytes` all-or-nothing: write a sibling temp file, then
-/// rename it into place (atomic on the same filesystem).
+/// Replace `path` with `bytes` all-or-nothing: write a sibling temp file, flush
+/// it to disk, then rename it into place (atomic on the same filesystem). The
+/// flush matters for power loss: without it, some filesystems can persist the
+/// rename before the data, leaving an empty file.
 fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file); // close before renaming (required on Windows)
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })

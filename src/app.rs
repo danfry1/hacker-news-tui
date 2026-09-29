@@ -595,8 +595,10 @@ impl App {
         };
         match prompt.kind {
             PromptKind::Jump => {
-                if let Ok(n) = prompt.input.parse::<usize>() {
-                    self.jump_to(n);
+                // Only digits can be typed, so a parse failure means the
+                // number overflowed: treat it as "the end".
+                if !prompt.input.is_empty() {
+                    self.jump_to(prompt.input.parse().unwrap_or(usize::MAX));
                 }
             }
             PromptKind::Search if prompt.input.is_empty() => {
@@ -759,10 +761,13 @@ impl App {
         if let Some(idx) = self.story_index(id) {
             self.reselect = None;
             self.select_row_in(View::List, idx);
-        } else if let Some(pos) = self.story_ids.iter().position(|&i| i == id) {
+        } else if let Some(pos) = self.story_ids.iter().position(|&i| i == id)
+            && pos >= self.ids_loaded
+        {
             self.pending_jump = Some(pos);
             self.load_more();
         } else {
+            // Gone from the feed, or already fetched but filtered out as dead.
             self.reselect = None;
         }
     }
