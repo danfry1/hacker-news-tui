@@ -39,6 +39,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Saving state is now atomic (written to a temporary file, then renamed into
+  place). Previously an interrupted save could leave a truncated `state.json`
+  that loaded as empty and was then saved over, losing bookmarks.
+- The remembered read history is capped at the 5,000 most recent stories, so
+  the state file no longer grows without bound.
 - Centered status messages ("fetching stories…", load errors, empty views)
   could be invisible, depending on the terminal height, because they were
   squeezed into a zero-height area. They now always render, and multi-line
