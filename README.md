@@ -128,6 +128,13 @@ searches there too.
 In the `:` and `/` prompts, `enter` confirms, `esc` cancels (restoring the
 previous selection), and an empty `/` search clears the highlighting.
 
+### Colours
+The interface is designed for 24-bit colour. On terminals without it, such as
+macOS Terminal.app, colours are mapped to the nearest of the standard 256. The
+app follows [`NO_COLOR`](https://no-color.org): when it is set, colours are
+dropped and the selection and search matches are shown in reverse video. To
+override detection, set `HN_TUI_COLOR` to `truecolor`, `256`, or `none`.
+
 ### Choosing a browser
 `o` opens links in a browser of your choice — including a terminal one. Set
 `HN_TUI_BROWSER` to a command (arguments are allowed):

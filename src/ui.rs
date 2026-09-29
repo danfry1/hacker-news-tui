@@ -11,6 +11,7 @@ use ratatui::widgets::{
 
 use crate::api::{Feed, Item};
 use crate::app::{App, Load, PromptKind, SETTINGS_COUNT, View};
+use crate::color::{self, ColorMode};
 use crate::util;
 
 const ORANGE: Color = Color::Rgb(255, 102, 0);
@@ -24,7 +25,7 @@ const READ: Color = Color::Rgb(176, 178, 186);
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-pub fn draw(frame: &mut Frame, app: &mut App) {
+pub fn draw(frame: &mut Frame, app: &mut App, colors: ColorMode) {
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
 
@@ -49,6 +50,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.show_settings {
         draw_settings(frame, app, area);
     }
+
+    color::apply(frame.buffer_mut(), colors, BG);
 }
 
 fn spinner(app: &App) -> &'static str {
@@ -806,7 +809,12 @@ fn highlighted(text: &str, query: Option<&str>, base: Style) -> Vec<Span<'static
     if ranges.is_empty() {
         return vec![Span::styled(text.to_string(), base)];
     }
-    let hit = base.fg(Color::Black).bg(ORANGE);
+    // Underlined as well as coloured, so hits still show without colour (where
+    // the selected row and the hit are both drawn in reverse video).
+    let hit = base
+        .fg(Color::Black)
+        .bg(ORANGE)
+        .add_modifier(Modifier::UNDERLINED);
     let mut spans = Vec::with_capacity(ranges.len() * 2 + 1);
     let mut at = 0;
     for r in ranges {
