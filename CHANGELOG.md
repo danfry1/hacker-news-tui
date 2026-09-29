@@ -65,6 +65,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- Update `ratatui` to 0.30 (and `crossterm` to 0.29). This drops the
+  transitive `lru` 0.12 (RUSTSEC-2026-0002, RUSTSEC-2026-0253, unsound) and
+  the unmaintained `paste` (RUSTSEC-2024-0436), leaving `cargo audit` with no
+  warnings. The minimum supported Rust version rises to 1.88, as ratatui 0.30
+  requires.
 - Update `rustls` to 0.23.45 (and `rustls-webpki` to 0.103.15) to address
   [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285), in
   which TLS 1.3 handshake messages could be accepted across encryption level
