@@ -58,6 +58,23 @@ pub enum View {
     Bookmarks,
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum PromptKind {
+    /// `:N` — jump to the story numbered N.
+    Jump,
+    /// `/text` — find rows containing text.
+    Search,
+}
+
+/// A vim-style command line shown in the footer while the user types.
+pub struct Prompt {
+    pub kind: PromptKind,
+    pub input: String,
+    /// Selection when the prompt opened, restored if it is cancelled (search
+    /// moves the selection live as the query is typed).
+    origin: Option<usize>,
+}
+
 pub struct App {
     client: Client,
     tx: UnboundedSender<Msg>,
@@ -77,6 +94,13 @@ pub struct App {
     ids_loaded: usize,
     loading_more: bool,
     story_gen: u64,
+    /// A `:N` target beyond the stories loaded so far; pages are fetched until
+    /// it is reachable, then it is selected.
+    pending_jump: Option<usize>,
+
+    pub prompt: Option<Prompt>,
+    /// The last submitted search, reused by `n` / `N` and highlighted on screen.
+    pub search: Option<String>,
 
     pub story: Option<Item>,
     pub comments: Load<Vec<Comment>>,
@@ -128,6 +152,9 @@ impl App {
             ids_loaded: 0,
             loading_more: false,
             story_gen: 0,
+            pending_jump: None,
+            prompt: None,
+            search: None,
             story: None,
             comments: Load::Loading,
             comment_state: ListState::default(),
@@ -189,6 +216,7 @@ impl App {
         self.story_ids.clear();
         self.ids_loaded = 0;
         self.loading_more = false;
+        self.pending_jump = None;
         let (client, feed, tx) = (self.client.clone(), self.feed, self.tx.clone());
         (self.spawn)(Box::pin(async move {
             let result = match api::fetch_ids(&client, feed).await {
@@ -209,7 +237,9 @@ impl App {
             return;
         }
         let start = self.ids_loaded;
-        let end = (start + PAGE).min(self.story_ids.len());
+        // A pending `:N` jump widens the batch so the target arrives in one go.
+        let want = self.pending_jump.map_or(0, |target| target + 1);
+        let end = (start + PAGE).max(want).min(self.story_ids.len());
         let batch = self.story_ids[start..end].to_vec();
         self.ids_loaded = end; // advance now so we don't double-fetch this page
         self.loading_more = true;
@@ -262,6 +292,7 @@ impl App {
                 if let Load::Ready(stories) = &mut self.stories {
                     stories.append(&mut items);
                 }
+                self.resolve_pending_jump();
             }
             Msg::Comments { seq, result } if seq == self.comment_gen => {
                 self.comment_state.select((!result.is_empty()).then_some(0));
@@ -297,6 +328,10 @@ impl App {
             self.on_key_settings(key);
             return;
         }
+        if self.prompt.is_some() {
+            self.on_key_prompt(key);
+            return;
+        }
         match self.view {
             View::List => self.on_key_list(key),
             View::Comments => self.on_key_comments(key),
@@ -328,10 +363,17 @@ impl App {
     }
 
     fn on_key_list(&mut self, key: KeyEvent) {
+        // Any further input supersedes a `:N` jump still waiting on the network,
+        // so the selection is never yanked away after the user moves on.
+        self.pending_jump = None;
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char(',') => self.open_settings(),
+            KeyCode::Char(':') => self.open_prompt(PromptKind::Jump),
+            KeyCode::Char('/') => self.open_prompt(PromptKind::Search),
+            KeyCode::Char('n') => self.search_step(true),
+            KeyCode::Char('N') => self.search_step(false),
             KeyCode::Down | KeyCode::Char('j') => self.move_list(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_list(-1),
             KeyCode::Char('g') | KeyCode::Home => self.select_list(0),
@@ -371,6 +413,9 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char(',') => self.open_settings(),
+            KeyCode::Char('/') => self.open_prompt(PromptKind::Search),
+            KeyCode::Char('n') => self.search_step(true),
+            KeyCode::Char('N') => self.search_step(false),
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => {
                 self.view = self.comments_origin;
             }
@@ -395,6 +440,10 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char(',') => self.open_settings(),
+            KeyCode::Char(':') => self.open_prompt(PromptKind::Jump),
+            KeyCode::Char('/') => self.open_prompt(PromptKind::Search),
+            KeyCode::Char('n') => self.search_step(true),
+            KeyCode::Char('N') => self.search_step(false),
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('b') => {
                 self.view = View::List;
             }
@@ -416,6 +465,202 @@ impl App {
         self.settings_index = 0;
     }
 
+    // ── jump & search prompt ────────────────────────────────────────────────
+
+    fn open_prompt(&mut self, kind: PromptKind) {
+        self.prompt = Some(Prompt {
+            kind,
+            input: String::new(),
+            origin: self.selected_row(),
+        });
+    }
+
+    fn on_key_prompt(&mut self, key: KeyEvent) {
+        let Some(prompt) = self.prompt.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.cancel_prompt(),
+            KeyCode::Enter => self.submit_prompt(),
+            KeyCode::Backspace => {
+                // Backspacing past the start closes the prompt, as in vim.
+                if prompt.input.pop().is_none() {
+                    self.cancel_prompt();
+                } else {
+                    self.preview_search();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if prompt.kind == PromptKind::Jump && !c.is_ascii_digit() {
+                    return;
+                }
+                prompt.input.push(c);
+                self.preview_search();
+            }
+            _ => {}
+        }
+    }
+
+    fn cancel_prompt(&mut self) {
+        if let Some(prompt) = self.prompt.take() {
+            if let Some(origin) = prompt.origin {
+                self.select_row(origin);
+            }
+        }
+    }
+
+    fn submit_prompt(&mut self) {
+        let Some(prompt) = self.prompt.take() else {
+            return;
+        };
+        match prompt.kind {
+            PromptKind::Jump => {
+                if let Ok(n) = prompt.input.parse::<usize>() {
+                    self.jump_to(n);
+                }
+            }
+            PromptKind::Search if prompt.input.is_empty() => {
+                // An empty search clears the active query and its highlighting.
+                self.search = None;
+            }
+            PromptKind::Search => {
+                if self.find_row(&prompt.input, 0, true).is_none() {
+                    self.toast(format!("no matches for “{}”", prompt.input));
+                }
+                self.search = Some(prompt.input);
+            }
+        }
+    }
+
+    /// Incremental search: move to the first match at or after where the prompt
+    /// was opened, or back to that origin when nothing (or no query) matches.
+    fn preview_search(&mut self) {
+        let Some(prompt) = &self.prompt else {
+            return;
+        };
+        if prompt.kind != PromptKind::Search {
+            return;
+        }
+        let origin = prompt.origin.unwrap_or(0);
+        let target = self.find_row(&prompt.input, origin, true).or(prompt.origin);
+        if let Some(idx) = target {
+            self.select_row(idx);
+        }
+    }
+
+    /// `n` / `N`: move to the next / previous row matching the last search,
+    /// wrapping around the ends.
+    fn search_step(&mut self, forward: bool) {
+        let Some(query) = self.search.clone() else {
+            self.toast("no search yet — press / to search");
+            return;
+        };
+        let len = self.row_count();
+        if len == 0 {
+            return;
+        }
+        let cur = self.selected_row().unwrap_or(0);
+        let start = if forward {
+            (cur + 1) % len
+        } else {
+            (cur + len - 1) % len
+        };
+        match self.find_row(&query, start, forward) {
+            Some(idx) => {
+                if (forward && idx <= cur) || (!forward && idx >= cur) {
+                    self.toast(if forward {
+                        "search wrapped to top"
+                    } else {
+                        "search wrapped to bottom"
+                    });
+                }
+                self.select_row(idx);
+            }
+            None => self.toast(format!("no matches for “{query}”")),
+        }
+    }
+
+    /// The first row matching `needle`, scanning from `start` in the given
+    /// direction and wrapping around.
+    fn find_row(&self, needle: &str, start: usize, forward: bool) -> Option<usize> {
+        let len = self.row_count();
+        if len == 0 || needle.is_empty() {
+            return None;
+        }
+        let start = start.min(len - 1);
+        (0..len)
+            .map(|k| {
+                if forward {
+                    (start + k) % len
+                } else {
+                    (start + len - k) % len
+                }
+            })
+            .find(|&i| self.row_matches(i, needle))
+    }
+
+    fn row_matches(&self, i: usize, needle: &str) -> bool {
+        match self.view {
+            View::List => match &self.stories {
+                Load::Ready(s) => s.get(i).is_some_and(|it| story_matches(it, needle)),
+                _ => false,
+            },
+            View::Bookmarks => self
+                .saved
+                .get(i)
+                .is_some_and(|it| story_matches(it, needle)),
+            View::Comments => self.visible.get(i).is_some_and(|c| {
+                util::contains_ci(&c.text, needle) || util::contains_ci(&c.by, needle)
+            }),
+        }
+    }
+
+    /// The query to highlight on screen: the one being typed, else the last one.
+    pub fn highlight_query(&self) -> Option<&str> {
+        match &self.prompt {
+            Some(p) if p.kind == PromptKind::Search => Some(p.input.as_str()),
+            _ => self.search.as_deref(),
+        }
+        .filter(|q| !q.is_empty())
+    }
+
+    /// `:N` — select the story numbered `n` (1-based, as displayed). In the feed,
+    /// a number past the loaded stories fetches ahead until it can be reached.
+    fn jump_to(&mut self, n: usize) {
+        let idx = n.saturating_sub(1);
+        match self.view {
+            View::Bookmarks => self.select_bookmark(idx as isize),
+            View::List => {
+                let more = self.ids_loaded < self.story_ids.len();
+                if idx >= self.story_len() && more && matches!(self.stories, Load::Ready(_)) {
+                    self.pending_jump = Some(idx);
+                    self.toast(format!("loading stories up to #{n}…"));
+                    // Parks on the last loaded story and, being near the end,
+                    // starts a fetch widened to reach the target.
+                    self.select_list(isize::MAX);
+                } else {
+                    self.select_list(idx as isize);
+                }
+            }
+            View::Comments => {}
+        }
+    }
+
+    /// Select a pending `:N` target once enough stories have arrived, or keep
+    /// fetching. Deleted/dead stories are filtered out of a page, so a batch can
+    /// fall short of the target and need another round.
+    fn resolve_pending_jump(&mut self) {
+        let Some(target) = self.pending_jump else {
+            return;
+        };
+        if target < self.story_len() || self.ids_loaded >= self.story_ids.len() {
+            self.pending_jump = None;
+            self.select_list(target as isize);
+        } else {
+            self.load_more();
+        }
+    }
+
     // ── selection helpers ───────────────────────────────────────────────────
 
     fn selected_story(&self) -> Option<&Item> {
@@ -429,6 +674,34 @@ impl App {
         match &self.stories {
             Load::Ready(s) => s.len(),
             _ => 0,
+        }
+    }
+
+    /// Selection in whichever list the current view shows.
+    fn selected_row(&self) -> Option<usize> {
+        match self.view {
+            View::List => self.list_state.selected(),
+            View::Comments => self.comment_state.selected(),
+            View::Bookmarks => self.bookmark_state.selected(),
+        }
+    }
+
+    fn row_count(&self) -> usize {
+        match self.view {
+            View::List => self.story_len(),
+            View::Comments => self.visible.len(),
+            View::Bookmarks => self.saved.len(),
+        }
+    }
+
+    fn select_row(&mut self, idx: usize) {
+        match self.view {
+            View::List => self.select_list(idx as isize),
+            View::Comments => {
+                let n = self.visible.len();
+                self.comment_state.select((n > 0).then(|| idx.min(n - 1)));
+            }
+            View::Bookmarks => self.select_bookmark(idx as isize),
         }
     }
 
@@ -580,6 +853,16 @@ impl App {
     pub fn is_animating(&self) -> bool {
         self.is_loading() || self.toast.is_some()
     }
+}
+
+/// Whether a story's title or domain contains `needle` (ASCII case-insensitive).
+fn story_matches(story: &Item, needle: &str) -> bool {
+    util::contains_ci(&story.title, needle)
+        || story
+            .url
+            .as_deref()
+            .and_then(util::domain)
+            .is_some_and(|d| util::contains_ci(&d, needle))
 }
 
 /// A comment row materialized for display: the depth-annotated, flattened view
@@ -1170,6 +1453,234 @@ mod tests {
         app.on_key(ch('q')); // closes settings, must not quit
         assert!(!app.show_settings);
         assert!(!app.should_quit);
+    }
+
+    // ── jump & search ──────────────────────────────────────────────────────────
+
+    fn typed(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.on_key(ch(c));
+        }
+    }
+
+    /// Loaded feed whose first stories have distinctive titles to search for.
+    fn titled(titles: &[&str]) -> (App, UnboundedReceiver<Msg>) {
+        let (mut app, rx) = loaded(40);
+        if let Load::Ready(stories) = &mut app.stories {
+            for (story, title) in stories.iter_mut().zip(titles) {
+                story.title = title.to_string();
+            }
+        }
+        (app, rx)
+    }
+
+    #[test]
+    fn colon_jumps_to_numbered_story() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(ch(':'));
+        typed(&mut app, "10");
+        assert_eq!(app.prompt.as_ref().unwrap().input, "10");
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.prompt.is_none());
+        assert_eq!(selected(&app), Some(9)); // 1-based as displayed
+    }
+
+    #[test]
+    fn jump_prompt_ignores_non_digits_and_swallows_keys() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(ch(':'));
+        typed(&mut app, "q3j"); // q must not quit, j must not move
+        assert!(!app.should_quit);
+        assert_eq!(app.prompt.as_ref().unwrap().input, "3");
+        assert_eq!(selected(&app), Some(0));
+    }
+
+    #[test]
+    fn esc_and_backspace_past_start_cancel_prompt() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(ch(':'));
+        typed(&mut app, "5");
+        app.on_key(key(KeyCode::Esc));
+        assert!(app.prompt.is_none());
+        assert!(!app.should_quit); // esc closed the prompt, not the app
+        assert_eq!(selected(&app), Some(0));
+
+        app.on_key(ch('/'));
+        app.on_key(key(KeyCode::Backspace));
+        assert!(app.prompt.is_none());
+    }
+
+    #[test]
+    fn jump_past_loaded_fetches_ahead_then_selects() {
+        let (mut app, _rx) = loaded(100); // 20 of 100 loaded
+        app.on_key(ch(':'));
+        typed(&mut app, "75");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_jump, Some(74));
+        assert_eq!(selected(&app), Some(FIRST_PAGE - 1)); // parked at the bottom
+        assert_eq!(app.ids_loaded, 75); // one widened batch, not page by page
+
+        let seq = app.story_gen;
+        app.on_msg(Msg::MoreStories {
+            seq,
+            items: items(&(21..=75).collect::<Vec<_>>()),
+        });
+        assert_eq!(app.pending_jump, None);
+        assert_eq!(selected(&app), Some(74));
+    }
+
+    #[test]
+    fn pending_jump_keeps_fetching_when_a_batch_falls_short() {
+        let (mut app, _rx) = loaded(100);
+        app.on_key(ch(':'));
+        typed(&mut app, "30");
+        app.on_key(key(KeyCode::Enter));
+        let seq = app.story_gen;
+        // Some stories in the batch were dead and got filtered out.
+        app.on_msg(Msg::MoreStories {
+            seq,
+            items: items(&(21..=25).collect::<Vec<_>>()),
+        });
+        assert_eq!(app.pending_jump, Some(29));
+        assert!(app.loading_more); // next batch requested
+    }
+
+    #[test]
+    fn keypress_cancels_pending_jump() {
+        let (mut app, _rx) = loaded(100);
+        app.on_key(ch(':'));
+        typed(&mut app, "75");
+        app.on_key(key(KeyCode::Enter));
+        app.on_key(ch('k')); // user moves on while it loads
+        let seq = app.story_gen;
+        app.on_msg(Msg::MoreStories {
+            seq,
+            items: items(&(21..=75).collect::<Vec<_>>()),
+        });
+        assert_eq!(selected(&app), Some(FIRST_PAGE - 2)); // not yanked to 74
+    }
+
+    #[test]
+    fn jump_beyond_feed_clamps_to_last() {
+        let (mut app, _rx) = loaded(15);
+        app.on_key(ch(':'));
+        typed(&mut app, "999");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(selected(&app), Some(14));
+        assert_eq!(app.pending_jump, None);
+    }
+
+    #[test]
+    fn search_moves_selection_as_you_type() {
+        let (mut app, _rx) = titled(&["Alpha", "Rust 2.0", "Beta", "rustls audit"]);
+        app.on_key(ch('/'));
+        typed(&mut app, "rust");
+        assert_eq!(selected(&app), Some(1));
+        assert_eq!(app.highlight_query(), Some("rust"));
+        app.on_key(key(KeyCode::Esc)); // cancel restores the origin
+        assert_eq!(selected(&app), Some(0));
+        assert_eq!(app.highlight_query(), None);
+    }
+
+    #[test]
+    fn n_and_shift_n_cycle_matches_and_wrap() {
+        let (mut app, _rx) = titled(&["Alpha", "Rust 2.0", "Beta", "rustls audit"]);
+        app.on_key(ch('/'));
+        typed(&mut app, "RUST");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.search.as_deref(), Some("RUST"));
+        assert_eq!(selected(&app), Some(1));
+        app.on_key(ch('n'));
+        assert_eq!(selected(&app), Some(3));
+        app.on_key(ch('n')); // wraps around
+        assert_eq!(selected(&app), Some(1));
+        assert!(app.toast.is_some());
+        app.on_key(ch('N')); // backwards wraps to the last match
+        assert_eq!(selected(&app), Some(3));
+    }
+
+    #[test]
+    fn search_matches_domain() {
+        let (mut app, _rx) = loaded(40);
+        if let Load::Ready(stories) = &mut app.stories {
+            stories[5].url = Some("https://github.com/x/y".into());
+        }
+        app.on_key(ch('/'));
+        typed(&mut app, "github");
+        assert_eq!(selected(&app), Some(5));
+    }
+
+    #[test]
+    fn unmatched_search_stays_put_and_says_so() {
+        let (mut app, _rx) = titled(&["Alpha", "Beta"]);
+        app.on_key(ch('j'));
+        app.on_key(ch('/'));
+        typed(&mut app, "zzz");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(selected(&app), Some(1));
+        assert!(app.toast.is_some());
+    }
+
+    #[test]
+    fn empty_search_clears_highlight() {
+        let (mut app, _rx) = titled(&["Alpha"]);
+        app.on_key(ch('/'));
+        typed(&mut app, "alp");
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.search.is_some());
+        app.on_key(ch('/'));
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.search.is_none());
+        assert_eq!(app.highlight_query(), None);
+    }
+
+    #[test]
+    fn n_without_search_hints() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(ch('n'));
+        assert_eq!(selected(&app), Some(0));
+        assert!(app.toast.is_some());
+    }
+
+    #[test]
+    fn search_in_comments_matches_text_and_author() {
+        let (mut app, _rx) = loaded(40);
+        app.on_key(key(KeyCode::Enter));
+        let seq = app.comment_gen;
+        let mut c2 = leaf(2);
+        c2.text = "I love the borrow checker".into();
+        let mut c3 = leaf(3);
+        c3.by = "dang".into();
+        app.on_msg(Msg::Comments {
+            seq,
+            result: vec![leaf(1), c2, c3],
+        });
+        app.on_key(ch('/'));
+        typed(&mut app, "borrow");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.comment_state.selected(), Some(1));
+        app.on_key(ch('/'));
+        typed(&mut app, "dang");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.comment_state.selected(), Some(2));
+        assert_eq!(app.view, View::Comments);
+    }
+
+    #[test]
+    fn jump_and_search_work_in_bookmarks() {
+        let (mut app, _rx) = app();
+        let mut saved = items(&[1, 2, 3]);
+        saved[2].title = "Show HN: a TUI".into();
+        app.restore(Settings::default(), HashSet::new(), saved);
+        app.on_key(ch('b'));
+        app.on_key(ch(':'));
+        typed(&mut app, "2");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.bookmark_state.selected(), Some(1));
+        app.on_key(ch('/'));
+        typed(&mut app, "show hn");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.bookmark_state.selected(), Some(2));
     }
 
     // ── persistence ────────────────────────────────────────────────────────────

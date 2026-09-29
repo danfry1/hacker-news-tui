@@ -95,6 +95,9 @@ attaches the archives to a GitHub Release for the tag.
 | --- | --- |
 | `j` / `k`, `↑` / `↓` | Move selection |
 | `g` / `G` | Jump to top / bottom |
+| `:` + number | Jump to that story (e.g. `:10` then `enter`); loads further stories if needed |
+| `/` + text | Search loaded titles and domains, moving as you type |
+| `n` / `N` | Next / previous search match (wraps around) |
 | `enter` | Open comments |
 | `o` | Open the article in your browser |
 | `s` | Bookmark / unbookmark the story |
@@ -110,6 +113,7 @@ attaches the archives to a GitHub Release for the tag.
 | --- | --- |
 | `j` / `k`, `↑` / `↓` | Move selection |
 | `space` / `enter` | Collapse / expand a thread |
+| `/` + text, `n` / `N` | Search comment text and authors; next / previous match |
 | `o` | Open the article |
 | `s` | Bookmark / unbookmark |
 | `esc` / `h` / `←` | Back |
@@ -117,7 +121,11 @@ attaches the archives to a GitHub Release for the tag.
 ### Settings (`,`) & Bookmarks (`b`)
 In the settings pane, `j`/`k` move, `space`/`enter` toggle, `,`/`esc` close.
 In the bookmarks view, `enter` opens comments, `o` opens the article, `s`
-removes a bookmark, and `b`/`esc` returns to the feed.
+removes a bookmark, and `b`/`esc` returns to the feed. `:` jumps and `/`
+searches there too.
+
+In the `:` and `/` prompts, `enter` confirms, `esc` cancels (restoring the
+previous selection), and an empty `/` search clears the highlighting.
 
 ### Choosing a browser
 `o` opens links in a browser of your choice — including a terminal one. Set
