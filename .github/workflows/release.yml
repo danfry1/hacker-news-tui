@@ -113,21 +113,21 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
-  # Bump the hand-written, multi-platform Homebrew formula in the tap. The
-  # archive checksums are read straight from this release's `.sha256` assets,
-  # so the formula can never drift from what was actually published.
-  homebrew-bump:
-    name: Bump Homebrew formula
+  # Open a pull request on danfry1/homebrew-tap that points hacker-news-tui.rb at this
+  # tag's source archive. The tap's CI builds and tests bottles on that pull
+  # request; publishing them is a manual `brew pr-pull` run in the tap. The
+  # push and the pull request use a short-lived App token scoped to the tap.
+  homebrew-formula:
+    name: Open Homebrew formula PR
     needs: upload
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      contents: read # read this release's assets; the tap push uses the App token
+      contents: read
     steps:
-      # Mint a short-lived token (≈1h) scoped to just the tap repo's contents.
-      # Only the App's private key is stored; no long-lived token exists.
       - name: Mint a tap token from the GitHub App
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.TAP_BUMP_APP_ID }}
           private-key: ${{ secrets.TAP_BUMP_APP_PRIVATE_KEY }}
@@ -135,71 +135,70 @@ jobs:
           repositories: homebrew-tap
 
       - name: Check out the tap
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: danfry1/homebrew-tap
           token: ${{ steps.app-token.outputs.token }}
           path: tap
 
-      - name: Update the formula from the release checksums
+      - name: Point the formula at this tag's source archive
         env:
-          # Pass the tag through the environment rather than inlining it into the
-          # script, so a crafted ref can never be interpreted as shell.
           TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          FORMULA: hacker-news-tui
         run: |
           set -euo pipefail
-          version="${TAG#v}"
+          url="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+          sha=$(curl --fail --silent --show-error --location --retry 3 "$url" | sha256sum | cut -d' ' -f1)
+          file="tap/${FORMULA}.rb"
+          # Drop the bottle block: its bottles belong to the old version. Publishing
+          # the tap pull request (brew pr-pull) writes a new block; if the PR is
+          # merged without publishing, the formula builds from source instead of
+          # pointing at bottles that do not exist.
+          sed -i -E \
+            -e "s#^  url \"[^\"]*\"#  url \"${url}\"#" \
+            -e "s#^  sha256 \"[0-9a-f]*\"#  sha256 \"${sha}\"#" \
+            -e '/^  bottle do$/,/^  end$/d' \
+            "$file"
+          # Removing the block leaves two blank lines; brew style allows one.
+          cat -s "$file" > "$file.new" && mv "$file.new" "$file"
+          grep -qF "url \"${url}\"" "$file"
+          grep -qF "sha256 \"${sha}\"" "$file"
+          ! grep -q '^  bottle do$' "$file"
+          cat "$file"
 
-          # Pull the published checksums straight from this release.
-          gh release download "$TAG" --repo "$REPO" --pattern '*.sha256' --dir shas
-          sha() { awk '{print $1}' "shas/hacker-news-tui-$1.sha256"; }
-          mac=$(sha aarch64-apple-darwin)
-          lx64=$(sha x86_64-unknown-linux-gnu)
-          larm=$(sha aarch64-unknown-linux-gnu)
-
-          # Rewrite the version line, bump the tag in each download URL, and swap
-          # each sha256 in based on the archive named in the url line above it.
-          formula=tap/hacker-news-tui.rb
-          awk -v ver="$version" -v mac="$mac" -v lx64="$lx64" -v larm="$larm" '
-            /^  version / { print "  version \"" ver "\""; next }
-            /url "/ {
-              gsub(/download\/v[0-9.]+\//, "download/v" ver "/")
-              if      ($0 ~ /aarch64-apple-darwin/)      pend = mac
-              else if ($0 ~ /x86_64-unknown-linux-gnu/)  pend = lx64
-              else if ($0 ~ /aarch64-unknown-linux-gnu/) pend = larm
-              print; next
-            }
-            /sha256 "/ && pend != "" {
-              sub(/sha256 "[^"]*"/, "sha256 \"" pend "\"")
-              print; pend = ""; next
-            }
-            { print }
-          ' "$formula" > "$formula.new"
-          mv "$formula.new" "$formula"
-
-          echo "--- updated formula ---"
-          cat "$formula"
-
-      - name: Commit and push as the App bot
+      - name: Push a branch and open the pull request
         env:
           TAG: ${{ github.ref_name }}
-          # Attribute the commit to the App's bot user (…[bot]) rather than a person.
+          REPO: ${{ github.repository }}
+          FORMULA: hacker-news-tui
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
           cd tap
           if git diff --quiet; then
-            echo "Formula already up to date; nothing to commit."
+            echo "Formula already points at ${TAG}; nothing to do."
             exit 0
           fi
+          version="${TAG#v}"
+          branch="${FORMULA}-${version}"
           bot_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git commit -am "Update hacker-news-tui to ${TAG#v}"
-          git push
+          git switch -c "$branch"
+          git commit -am "${FORMULA} ${version}"
+          # A re-run replaces the bot's own branch; main is never force-pushed.
+          git push --force origin "$branch"
+          if [ -n "$(gh pr list --repo danfry1/homebrew-tap --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            echo "Pull request for ${branch} already open; branch updated."
+            exit 0
+          fi
+          head_sha=$(git rev-parse HEAD)
+          pr_url=$(gh pr create --repo danfry1/homebrew-tap --base main --head "$branch" \
+            --title "${FORMULA} ${version}" \
+            --body "Points \`${FORMULA}.rb\` at the ${TAG} source archive, opened by the ${REPO} release workflow. Publish the bottles once CI is green (do not use the merge button).")
+          gh pr comment "$pr_url" --body "Publish: \`gh workflow run publish.yml -R danfry1/homebrew-tap -f pull_request=${pr_url##*/} -f head_sha=${head_sha}\`"
 
   # Bump the Scoop manifest in the bucket, the Windows counterpart to the
   # Homebrew job. The manifest is JSON, so jq sets the version, URL, and the
