@@ -78,15 +78,8 @@ to your shell config (`~/.zshrc`, `~/.bashrc`, …):
 alias hnt='hacker-news-tui'
 ```
 
-Maintainers cut a release by pushing a version tag:
-
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-This triggers `.github/workflows/release.yml`, which builds every target and
-attaches the archives to a GitHub Release for the tag.
+Maintainers: see [RELEASING.md](RELEASING.md) for cutting a release, including
+publishing the Homebrew bottles.
 
 ## Keyboard shortcuts
 
