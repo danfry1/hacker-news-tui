@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The Top feed marks the end of the front page, after its 30th story, as a
+  natural place to stop. Scrolling continues below it. The end of a feed
+  says so ("that's all 500 stories").
 - `J` / `K` jump to the next / previous top-level thread in a discussion, and
   `p` to the parent comment. The comment jumped to is scrolled to the top.
 - The discussion shows which thread is selected ("thread 3 of 59"), and each
@@ -15,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The next page of stories is fetched about a screen ahead of the selection,
+  instead of 3 stories from the end, so scrolling rarely waits. When it does,
+  a "loading more…" line shows at the bottom of the list.
 - A calmer story list. Rank numbers are grey, so orange marks only scores and
   the selection. The meta line reads score, comments, age, then author, which
   is the order people weigh a story in. "240 comments" replaces the 💬 emoji,

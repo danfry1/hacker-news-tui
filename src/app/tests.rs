@@ -145,6 +145,48 @@ fn nearing_bottom_triggers_load_more() {
 }
 
 #[test]
+fn the_next_page_is_fetched_a_screen_ahead() {
+    let (mut app, _rx) = loaded(40);
+    app.on_key(ch('j')); // row 1 of 20: still far from the end
+    assert!(!app.loading_more);
+    app.select_row(20 - PREFETCH); // a screenful from the end
+    assert!(app.loading_more);
+}
+
+#[test]
+fn feed_markers_follow_the_front_page_and_the_list_end() {
+    let (mut app, _rx) = loaded(40);
+    assert!(app.list_markers(19).is_empty(), "more ids remain to load");
+    app.on_key(ch('G'));
+    assert_eq!(app.list_markers(19), [ListMarker::LoadingMore]);
+
+    let seq = app.story_gen;
+    let ids: Vec<u64> = (21..=40).collect();
+    app.on_msg(Msg::MoreStories {
+        seq,
+        items: items(&ids),
+    });
+    assert_eq!(app.list_markers(29), [ListMarker::FrontPageEnd]);
+    assert_eq!(app.list_markers(39), [ListMarker::End(40)]);
+    assert!(app.list_markers(30).is_empty());
+
+    app.on_key(ch('2')); // only the Top feed has a front page
+    let seq = app.story_gen;
+    let ids: Vec<u64> = (1..=40).collect();
+    app.on_msg(Msg::Stories {
+        seq,
+        result: Ok((ids.clone(), items(&ids[..20]))),
+    });
+    app.select_row(19);
+    let seq = app.story_gen;
+    app.on_msg(Msg::MoreStories {
+        seq,
+        items: items(&ids[20..]),
+    });
+    assert!(app.list_markers(29).is_empty());
+}
+
+#[test]
 fn load_more_is_guarded_against_double_fetch() {
     let (mut app, _rx) = loaded(40);
     app.on_key(ch('G'));
@@ -1086,6 +1128,25 @@ fn click_selects_then_opens() {
     app.on_mouse(mouse(left, 10, 1 + 2 * 3));
     assert_eq!(app.view, View::Comments);
     assert_eq!(app.story.as_ref().unwrap().id, 4);
+}
+
+#[test]
+fn clicks_below_a_marker_line_reach_the_right_story() {
+    let (mut app, _rx) = with_mouse();
+    app.on_key(ch('G'));
+    let seq = app.story_gen;
+    let ids: Vec<u64> = (21..=40).collect();
+    app.on_msg(Msg::MoreStories {
+        seq,
+        items: items(&ids),
+    });
+    *app.list_state.offset_mut() = 25;
+    let left = MouseEventKind::Down(MouseButton::Left);
+    // Rows 25–28 take two lines each, row 29 three (the front-page marker).
+    app.on_mouse(mouse(left, 10, 1 + 8 + 2)); // the marker under row 29
+    assert_eq!(selected(&app), Some(29));
+    app.on_mouse(mouse(left, 10, 1 + 8 + 3)); // first line of row 30
+    assert_eq!(selected(&app), Some(30));
 }
 
 #[test]
