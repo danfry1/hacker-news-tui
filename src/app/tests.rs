@@ -378,6 +378,78 @@ fn comment_navigation_clamps() {
     assert_eq!(app.comment_state.selected(), Some(2));
 }
 
+/// Open comments on two threads: 1 (replies 2, which has reply 3) and 4
+/// (reply 5). Flattened rows: 1, 2, 3, 4, 5.
+fn two_threads() -> (App, UnboundedReceiver<Msg>) {
+    let (mut app, rx) = loaded(40);
+    app.on_key(key(KeyCode::Enter));
+    let seq = app.comment_gen;
+    let tree = vec![
+        Comment {
+            children: vec![Comment {
+                children: vec![leaf(3)],
+                ..leaf(2)
+            }],
+            ..leaf(1)
+        },
+        Comment {
+            children: vec![leaf(5)],
+            ..leaf(4)
+        },
+    ];
+    app.on_msg(Msg::Comments {
+        seq,
+        result: tree,
+        truncated: false,
+    });
+    (app, rx)
+}
+
+#[test]
+fn shift_j_and_k_jump_between_top_level_threads() {
+    let (mut app, _rx) = two_threads();
+    app.comment_state.select(Some(2)); // deep inside thread 1
+    app.on_key(ch('J'));
+    assert_eq!(app.comment_state.selected(), Some(3));
+    assert_eq!(
+        app.comment_state.offset(),
+        3,
+        "the thread is scrolled to the top"
+    );
+    app.on_key(ch('J')); // no further thread
+    assert_eq!(app.comment_state.selected(), Some(3));
+
+    app.comment_state.select(Some(4)); // reply in thread 2
+    app.on_key(ch('K')); // back to the start of its own thread
+    assert_eq!(app.comment_state.selected(), Some(3));
+    app.on_key(ch('K'));
+    assert_eq!(app.comment_state.selected(), Some(0));
+    app.on_key(ch('K'));
+    assert_eq!(app.comment_state.selected(), Some(0));
+}
+
+#[test]
+fn p_moves_to_the_parent_comment() {
+    let (mut app, _rx) = two_threads();
+    app.comment_state.select(Some(2));
+    app.on_key(ch('p'));
+    assert_eq!(app.comment_state.selected(), Some(1));
+    app.on_key(ch('p'));
+    assert_eq!(app.comment_state.selected(), Some(0));
+    app.on_key(ch('p')); // a top-level comment has no parent
+    assert_eq!(app.comment_state.selected(), Some(0));
+}
+
+#[test]
+fn thread_position_counts_top_level_comments() {
+    let (mut app, _rx) = two_threads();
+    app.comment_state.select(Some(2));
+    assert_eq!(app.thread_position(), Some((1, 2)));
+    app.comment_state.select(Some(4));
+    assert_eq!(app.thread_position(), Some((2, 2)));
+    assert_eq!(app.visible_comments()[0].replies, 2);
+}
+
 #[test]
 fn esc_leaves_comments_for_list() {
     let (mut app, _rx) = loaded(40);
