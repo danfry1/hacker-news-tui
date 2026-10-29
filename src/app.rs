@@ -31,6 +31,13 @@ type Opener = Box<dyn Fn(&str) -> bool + Send>;
 const FIRST_PAGE: usize = 20;
 /// Stories materialized per batch when scrolling further down.
 const PAGE: usize = 30;
+/// How close to the last loaded story the selection gets before the next page
+/// is fetched: about a screenful, so it has usually arrived by the time the
+/// reader gets there.
+const PREFETCH: usize = 15;
+/// Stories on Hacker News's front page, where the Top feed marks a natural
+/// place to stop.
+pub const FRONT_PAGE: usize = 30;
 /// Most comments fetched from Firebase for one discussion, so huge threads stay
 /// responsive when the whole thread can't come from Algolia in one request.
 const COMMENT_LIMIT: usize = 250;
@@ -51,6 +58,17 @@ pub enum Msg {
         /// Whether [`COMMENT_LIMIT`] (or the depth bound) left comments out.
         truncated: bool,
     },
+}
+
+/// A line drawn under a story in the feed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ListMarker {
+    /// After the 30th story of the Top feed.
+    FrontPageEnd,
+    /// Under the last story while the next page is fetched.
+    LoadingMore,
+    /// Under the last story once the whole feed is loaded, with its length.
+    End(usize),
 }
 
 /// Loading lifecycle for an async resource.
@@ -413,20 +431,50 @@ impl App {
         self.move_selection(step);
     }
 
+    /// The marker lines drawn under feed story `i`. The renderer and click
+    /// mapping both use this, so rows stay where clicks expect them.
+    pub fn list_markers(&self, i: usize) -> Vec<ListMarker> {
+        let mut markers = Vec::new();
+        let len = self.story_len();
+        if self.feed == Feed::Top && i + 1 == FRONT_PAGE {
+            markers.push(ListMarker::FrontPageEnd);
+        }
+        if i + 1 == len {
+            if self.loading_more {
+                markers.push(ListMarker::LoadingMore);
+            } else if self.ids_loaded >= self.story_ids.len() {
+                markers.push(ListMarker::End(len));
+            }
+        }
+        markers
+    }
+
+    /// The story row at `line` lines below the top of the visible list.
+    fn row_at(&self, line: usize) -> usize {
+        let state = self.list_state(self.view);
+        let mut top = 0;
+        for idx in state.offset()..self.row_count() {
+            // Story rows are two lines tall, plus any marker lines in the feed.
+            let mut height = 2;
+            if self.view == View::List {
+                height += self.list_markers(idx).len();
+            }
+            if line < top + height {
+                return idx;
+            }
+            top += height;
+        }
+        usize::MAX
+    }
+
     fn click(&mut self, column: u16, row: u16) {
         let area = self.list_area;
         let inside =
             column >= area.x && column < area.right() && row >= area.y && row < area.bottom();
-        let state = match self.view {
-            View::List => &self.list_state,
-            View::Bookmarks => &self.bookmark_state,
-            View::Comments => return, // variable-height rows; use the keyboard
-        };
-        if !inside {
-            return;
+        if self.view == View::Comments || !inside {
+            return; // comment rows are variable-height; use the keyboard
         }
-        // Story rows are two lines tall.
-        let idx = state.offset() + (row - area.y) as usize / 2;
+        let idx = self.row_at((row - area.y) as usize);
         if idx >= self.row_count() {
             return;
         }
@@ -836,7 +884,7 @@ impl App {
         }
         let clamped = idx.min(len - 1);
         self.list_state_mut(view).select(Some(clamped));
-        if view == View::List && clamped + 3 >= len {
+        if view == View::List && clamped + PREFETCH >= len {
             self.load_more();
         }
     }

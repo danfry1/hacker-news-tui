@@ -10,7 +10,7 @@ use ratatui::widgets::{
 };
 
 use crate::api::{Feed, Item};
-use crate::app::{App, Load, PromptKind, SETTINGS_COUNT, View};
+use crate::app::{App, ListMarker, Load, PromptKind, SETTINGS_COUNT, View};
 use crate::color::{self, ColorMode};
 use crate::util;
 
@@ -156,14 +156,21 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, story)| {
-            story_row(
+            let mut lines = story_lines(
                 i,
                 story,
                 app.visited.contains(&story.id),
                 app.is_saved(story.id),
                 cols,
                 query,
-            )
+            );
+            let indent = " ".repeat(cols.num + 2);
+            lines.extend(
+                app.list_markers(i)
+                    .into_iter()
+                    .map(|m| marker_line(m, &indent, app)),
+            );
+            ListItem::new(Text::from(lines))
         })
         .collect();
 
@@ -171,6 +178,21 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let list = story_list(items);
     frame.render_stateful_widget(list, area, &mut app.list_state);
     app.list_area = area;
+}
+
+/// A marker under a feed story. Its own background keeps it out of the
+/// selection highlight when the story above it is selected.
+fn marker_line(marker: ListMarker, indent: &str, app: &App) -> Line<'static> {
+    let rule = |text: String| Span::styled(format!("─── {text} ───"), Style::default().fg(FAINT));
+    let span = match marker {
+        ListMarker::FrontPageEnd => rule("end of the front page".into()),
+        ListMarker::End(n) => rule(format!("that's all {n} stories")),
+        ListMarker::LoadingMore => Span::styled(
+            format!("{} loading more…", spinner(app)),
+            Style::default().fg(DIM),
+        ),
+    };
+    Line::from(vec![Span::raw(indent.to_string()), span]).style(Style::default().bg(BG))
 }
 
 // ── bookmarks ────────────────────────────────────────────────────────────────
@@ -192,7 +214,14 @@ fn draw_bookmarks(frame: &mut Frame, app: &mut App, area: Rect) {
         .enumerate()
         .map(|(i, story)| {
             let read = app.visited.contains(&story.id);
-            story_row(i, story, read, true, cols, app.highlight_query())
+            ListItem::new(Text::from(story_lines(
+                i,
+                story,
+                read,
+                true,
+                cols,
+                app.highlight_query(),
+            )))
         })
         .collect();
 
@@ -221,14 +250,14 @@ impl RowCols {
 }
 
 /// A single two-line story row, shared by the feed list and the bookmarks view.
-fn story_row(
+fn story_lines(
     i: usize,
     story: &Item,
     read: bool,
     saved: bool,
     cols: RowCols,
     query: Option<&str>,
-) -> ListItem<'static> {
+) -> Vec<Line<'static>> {
     let title_style = if read {
         Style::default().fg(READ)
     } else {
@@ -264,7 +293,7 @@ fn story_row(
     let mut meta = vec![Span::raw(" ".repeat(cols.num + 2))];
     meta.extend(story_meta(story));
 
-    ListItem::new(Text::from(vec![Line::from(title_spans), Line::from(meta)]))
+    vec![Line::from(title_spans), Line::from(meta)]
 }
 
 /// A story's score, comments, age and author, in the order people weigh them

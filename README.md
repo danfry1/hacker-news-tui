@@ -8,8 +8,9 @@ built with [Ratatui](https://ratatui.rs).
 ## Features
 
 - **Six feeds** — Top, New, Best, Ask, Show, and Jobs, switchable instantly.
-- **Infinite scroll** — the next batch of stories loads and appends automatically
-  as you scroll toward the bottom, so you can keep reading without paging.
+- **Infinite scroll** — the next batch of stories loads about a screen ahead of
+  you, so you can keep reading without paging. The Top feed marks the end of
+  the front page (its first 30 stories), a natural place to stop.
 - **Bookmarks** — save stories with `s` and revisit them in the `★ Saved` view
   (`b`); saved stories are marked with a star in every list.
 - **In-app settings pane** (`,`) — opt in to remembering read-state and
