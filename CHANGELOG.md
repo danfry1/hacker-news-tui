@@ -15,8 +15,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Comments are kept to a comfortable reading width (92 columns) and centred
-  on wider terminals, instead of running the full width of the screen.
+- Comments are kept to a comfortable reading width (92 columns) on wide
+  terminals, instead of running the full width of the screen.
 - Discussions now load in full and much faster. The whole comment thread is
   fetched from Algolia's HN Search API in one request instead of one request
   per comment, so long threads are no longer cut off at 250 comments.

@@ -24,7 +24,8 @@ const SELECT_BG: Color = Color::Rgb(38, 42, 50);
 const READ: Color = Color::Rgb(176, 178, 186);
 
 /// Widest the comments view grows, so lines stay a comfortable length to read
-/// on wide terminals. Wider terminals centre it.
+/// on wide terminals. It stays at the left edge, in line with the header, the
+/// story list and the footer.
 const READING_WIDTH: u16 = 92;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -358,7 +359,9 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let op = app.story.as_ref().map(|s| s.by.clone()).unwrap_or_default();
-    let text_width = body.width.saturating_sub(1) as usize;
+    // One column for the selection marker and one of margin on the right, so
+    // text doesn't run into the edge of the selected comment's background.
+    let text_width = body.width.saturating_sub(2) as usize;
 
     let query = app.highlight_query();
     let visible = app.visible_comments();
@@ -846,12 +849,10 @@ fn draw_center(frame: &mut Frame, area: Rect, msg: &str, color: Color) {
     frame.render_widget(para, slot);
 }
 
-/// `area` narrowed to at most [`READING_WIDTH`] columns, centred.
+/// `area` narrowed to at most [`READING_WIDTH`] columns.
 fn reading_column(area: Rect) -> Rect {
-    let width = area.width.min(READING_WIDTH);
     Rect {
-        x: area.x + (area.width - width) / 2,
-        width,
+        width: area.width.min(READING_WIDTH),
         ..area
     }
 }
@@ -922,12 +923,9 @@ mod tests {
     }
 
     #[test]
-    fn reading_column_caps_and_centres_wide_areas() {
+    fn reading_column_caps_wide_areas_at_the_left_edge() {
         let wide = reading_column(Rect::new(0, 1, 200, 30));
-        assert_eq!(
-            (wide.x, wide.width, wide.y, wide.height),
-            (54, READING_WIDTH, 1, 30)
-        );
+        assert_eq!(wide, Rect::new(0, 1, READING_WIDTH, 30));
         let narrow = Rect::new(0, 1, 60, 30);
         assert_eq!(reading_column(narrow), narrow);
     }
