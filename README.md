@@ -16,7 +16,8 @@ built with [Ratatui](https://ratatui.rs).
   bookmarks across runs. Both are **off by default**: nothing is written to disk
   unless you turn it on.
 - **Threaded comments** with colored depth guides, collapsible subtrees, and an
-  `OP` badge so you can follow the original poster.
+  `OP` badge so you can follow the original poster. `J` / `K` skip between
+  top-level threads, and text is kept to a comfortable reading width.
 - **Async, non-blocking UI** — stories and whole comment trees are fetched
   concurrently in the background while the interface stays responsive, with a
   live loading spinner.
@@ -106,6 +107,8 @@ publishing the Homebrew bottles.
 | Key | Action |
 | --- | --- |
 | `j` / `k`, `↑` / `↓` | Move selection |
+| `J` / `K` | Next / previous top-level thread, skipping the current conversation |
+| `p` | Parent comment |
 | `space` / `enter` | Collapse / expand a thread |
 | `/` + text, `n` / `N` | Search comment text and authors; next / previous match |
 | `o` / `O` | Open the article / the HN discussion page |

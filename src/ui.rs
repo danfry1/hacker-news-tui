@@ -23,6 +23,11 @@ const SELECT_BG: Color = Color::Rgb(38, 42, 50);
 // Visited titles: clearly muted vs. unread white, but still comfortably legible.
 const READ: Color = Color::Rgb(176, 178, 186);
 
+/// Widest the comments view grows, so lines stay a comfortable length to read
+/// on wide terminals. It stays at the left edge, in line with the header, the
+/// story list and the footer.
+const READING_WIDTH: u16 = 92;
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn draw(frame: &mut Frame, app: &mut App, colors: ColorMode) {
@@ -316,6 +321,7 @@ fn story_list(items: Vec<ListItem<'static>>) -> List<'static> {
 // ── comments ─────────────────────────────────────────────────────────────────
 
 fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
+    let area = reading_column(area);
     let width = area.width as usize;
     let header_lines = story_header_lines(app, width.saturating_sub(2));
     let header_height = (header_lines.len() as u16 + 2).min(area.height.saturating_sub(1));
@@ -323,14 +329,22 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks =
         Layout::vertical([Constraint::Length(header_height), Constraint::Min(0)]).split(area);
 
+    let mut header_block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(FAINT))
+        .padding(Padding::horizontal(1));
+    if let Some((thread, threads)) = app.thread_position() {
+        header_block = header_block.title_bottom(
+            Line::from(Span::styled(
+                format!(" thread {thread} of {threads} "),
+                Style::default().fg(DIM),
+            ))
+            .right_aligned(),
+        );
+    }
     let header = Paragraph::new(header_lines)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_type(BorderType::Plain)
-                .border_style(Style::default().fg(FAINT))
-                .padding(Padding::horizontal(1)),
-        )
+        .block(header_block)
         .wrap(Wrap { trim: false });
     frame.render_widget(header, chunks[0]);
 
@@ -345,7 +359,9 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let op = app.story.as_ref().map(|s| s.by.clone()).unwrap_or_default();
-    let text_width = body.width.saturating_sub(1) as usize;
+    // One column for the selection marker and one of margin on the right, so
+    // text doesn't run into the edge of the selected comment's background.
+    let text_width = body.width.saturating_sub(2) as usize;
 
     let query = app.highlight_query();
     let visible = app.visible_comments();
@@ -383,6 +399,18 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!("  {}", util::time_ago(flat.time)),
                 Style::default().fg(FAINT),
             ));
+            // How long a conversation is, so it can be skipped with `J`.
+            if flat.depth == 0 && !flat.collapsed && flat.replies > 0 {
+                let label = if flat.replies == 1 {
+                    "reply"
+                } else {
+                    "replies"
+                };
+                head.push(Span::styled(
+                    format!("  {} {label}", flat.replies),
+                    Style::default().fg(DIM),
+                ));
+            }
             if flat.links > 0 && !flat.collapsed {
                 let label = if flat.links == 1 { "link" } else { "links" };
                 head.push(Span::styled(
@@ -614,6 +642,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         ],
         View::Comments => &[
             ("j/k", "move"),
+            ("J/K", "thread"),
             ("space", "collapse"),
             ("esc", "back"),
             ("o", "article"),
@@ -675,7 +704,7 @@ fn fit_hints<'a>(
 // ── overlays ─────────────────────────────────────────────────────────────────
 
 fn draw_help(frame: &mut Frame, area: Rect) {
-    let popup = centered(58, 22, area);
+    let popup = centered(58, 24, area);
     frame.render_widget(Clear, popup);
 
     let key = Style::default().fg(ORANGE).add_modifier(Modifier::BOLD);
@@ -702,6 +731,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         row("r  /  ,", "refresh / settings"),
         Line::from(""),
         Line::from(Span::styled("  Comments", head)),
+        row("J / K", "next / previous thread"),
+        row("p", "parent comment"),
         row("space / enter", "collapse / expand"),
         row("/ · n / N", "search comments · next / previous"),
         row("o / O", "open article / HN discussion"),
@@ -818,6 +849,14 @@ fn draw_center(frame: &mut Frame, area: Rect, msg: &str, color: Color) {
     frame.render_widget(para, slot);
 }
 
+/// `area` narrowed to at most [`READING_WIDTH`] columns.
+fn reading_column(area: Rect) -> Rect {
+    Rect {
+        width: area.width.min(READING_WIDTH),
+        ..area
+    }
+}
+
 fn centered(w: u16, h: u16, area: Rect) -> Rect {
     let w = w.min(area.width);
     let h = h.min(area.height);
@@ -881,6 +920,14 @@ mod tests {
         (0..h)
             .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect())
             .collect()
+    }
+
+    #[test]
+    fn reading_column_caps_wide_areas_at_the_left_edge() {
+        let wide = reading_column(Rect::new(0, 1, 200, 30));
+        assert_eq!(wide, Rect::new(0, 1, READING_WIDTH, 30));
+        let narrow = Rect::new(0, 1, 60, 30);
+        assert_eq!(reading_column(narrow), narrow);
     }
 
     #[test]

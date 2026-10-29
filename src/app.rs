@@ -526,6 +526,9 @@ impl App {
                 self.view = self.comments_origin;
             }
             KeyCode::Enter | KeyCode::Char(' ') => self.toggle_collapse(),
+            KeyCode::Char('J') => self.jump_thread(true),
+            KeyCode::Char('K') => self.jump_thread(false),
+            KeyCode::Char('p') => self.jump_parent(),
             KeyCode::Char('u') => self.open_comment_link(),
             _ => {}
         }
@@ -875,6 +878,52 @@ impl App {
         self.rebuild_visible();
     }
 
+    /// `J` / `K`: move to the next or previous top-level comment, skipping
+    /// the rest of the current conversation.
+    fn jump_thread(&mut self, forward: bool) {
+        let Some(cur) = self.comment_state.selected() else {
+            return;
+        };
+        let is_root = |&i: &usize| self.visible[i].depth == 0;
+        let target = if forward {
+            (cur + 1..self.visible.len()).find(is_root)
+        } else {
+            (0..cur.min(self.visible.len())).rev().find(is_root)
+        };
+        if let Some(i) = target {
+            self.select_comment_at_top(i);
+        }
+    }
+
+    /// `p`: move to the selected comment's parent.
+    fn jump_parent(&mut self) {
+        let Some(cur) = self.comment_state.selected() else {
+            return;
+        };
+        let Some(depth) = self.visible.get(cur).map(|c| c.depth) else {
+            return;
+        };
+        if let Some(i) = (0..cur).rev().find(|&i| self.visible[i].depth < depth) {
+            self.select_comment_at_top(i);
+        }
+    }
+
+    /// Select a comment and scroll it to the top of the view, so a jump lands
+    /// on the start of what was jumped to rather than wherever it falls.
+    fn select_comment_at_top(&mut self, i: usize) {
+        self.comment_state.select(Some(i));
+        *self.comment_state.offset_mut() = i;
+    }
+
+    /// The selected comment's top-level thread and the number of threads,
+    /// as a 1-based `(thread, threads)`.
+    pub fn thread_position(&self) -> Option<(usize, usize)> {
+        let cur = self.comment_state.selected()?;
+        let upto = self.visible.get(..=cur)?;
+        let roots = |rows: &[FlatComment]| rows.iter().filter(|c| c.depth == 0).count();
+        Some((roots(upto), roots(&self.visible)))
+    }
+
     // ── bookmarks ─────────────────────────────────────────────────────────────
 
     /// The story relevant to the current view: the selected list/bookmark row,
@@ -1043,11 +1092,14 @@ pub struct FlatComment {
     pub links: usize,
     /// Descendants hidden beneath this node when it is collapsed (for the badge).
     pub hidden: usize,
+    /// All descendants, collapsed or not.
+    pub replies: usize,
 }
 
 fn flatten(list: &[Comment], collapsed: &HashSet<u64>, depth: usize, out: &mut Vec<FlatComment>) {
     for c in list {
         let is_collapsed = collapsed.contains(&c.id);
+        let replies = c.descendant_count();
         out.push(FlatComment {
             id: c.id,
             by: c.by.clone(),
@@ -1062,11 +1114,8 @@ fn flatten(list: &[Comment], collapsed: &HashSet<u64>, depth: usize, out: &mut V
             collapsed: is_collapsed,
             has_children: !c.children.is_empty(),
             links: c.links.len(),
-            hidden: if is_collapsed {
-                c.descendant_count()
-            } else {
-                0
-            },
+            hidden: if is_collapsed { replies } else { 0 },
+            replies,
         });
         if !is_collapsed {
             flatten(&c.children, collapsed, depth + 1, out);
