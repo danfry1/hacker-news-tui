@@ -129,6 +129,9 @@ pub struct Comment {
     pub text: String,
     /// `http(s)` links in the comment, from the raw HTML (see [`crate::util::extract_links`]).
     pub links: Vec<String>,
+    /// The text laid out as paragraphs, quotes and code, for display. `text`
+    /// is the same content as plain text, for search.
+    pub body: Vec<crate::util::Block>,
     pub children: Vec<Comment>,
 }
 
@@ -145,6 +148,7 @@ impl Comment {
             time,
             text: crate::util::clean_html(html),
             links: crate::util::extract_links(html),
+            body: crate::util::blocks(html),
             children,
         }
     }
@@ -443,6 +447,7 @@ mod tests {
             time: 0,
             text: String::new(),
             links: vec![],
+            body: vec![],
             children: vec![],
         };
         let tree = Comment {

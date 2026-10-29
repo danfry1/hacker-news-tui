@@ -20,6 +20,9 @@ const DIM: Color = Color::Rgb(130, 130, 138);
 const FAINT: Color = Color::Rgb(90, 90, 98);
 const ACCENT: Color = Color::Rgb(120, 170, 255);
 const SELECT_BG: Color = Color::Rgb(38, 42, 50);
+// Code blocks in comments: a tint distinct from both the page and the selection.
+const CODE_BG: Color = Color::Rgb(30, 33, 40);
+const CODE_FG: Color = Color::Rgb(200, 205, 215);
 // Visited titles: clearly muted vs. unread white, but still comfortably legible.
 const READ: Color = Color::Rgb(176, 178, 186);
 
@@ -476,10 +479,15 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
             let mut lines = vec![Line::from(head)];
             if !flat.collapsed {
                 let body_width = text_width.saturating_sub(flat.depth * 2);
-                for wl in util::wrap(&flat.text, body_width) {
-                    let mut spans = vec![Span::styled(indent.clone(), bar)];
-                    spans.extend(highlighted(&wl, query, Style::default()));
-                    lines.push(Line::from(spans));
+                for (i, block) in flat.body.iter().enumerate() {
+                    if i > 0 {
+                        lines.push(Line::from(Span::styled(indent.clone(), bar)));
+                    }
+                    for body_line in block_lines(block, body_width, query) {
+                        let mut spans = vec![Span::styled(indent.clone(), bar)];
+                        spans.extend(body_line);
+                        lines.push(Line::from(spans));
+                    }
                 }
             }
             lines.push(Line::from(""));
@@ -493,6 +501,57 @@ fn draw_comments(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_spacing(ratatui::widgets::HighlightSpacing::Always);
 
     frame.render_stateful_widget(list, body, &mut app.comment_state);
+}
+
+/// A comment block's lines, wrapped to `width`: paragraphs as plain text,
+/// quotes behind a bar in grey italics, and code unwrapped on a tinted
+/// background, cut off at the edge rather than reflowed.
+fn block_lines(block: &util::Block, width: usize, query: Option<&str>) -> Vec<Vec<Span<'static>>> {
+    let styled = |line: Vec<util::Run>, base: Style| -> Vec<Span<'static>> {
+        line.iter()
+            .flat_map(|run| {
+                let mut style = base;
+                if run.italic {
+                    style = style.add_modifier(Modifier::ITALIC);
+                }
+                if run.link {
+                    style = style.fg(ACCENT);
+                }
+                highlighted(&run.text, query, style)
+            })
+            .collect()
+    };
+    match block {
+        util::Block::Para(runs) => util::wrap_runs(runs, width)
+            .into_iter()
+            .map(|line| styled(line, Style::default()))
+            .collect(),
+        util::Block::Quote(runs) => {
+            let base = Style::default().fg(DIM).add_modifier(Modifier::ITALIC);
+            util::wrap_runs(runs, width.saturating_sub(2))
+                .into_iter()
+                .map(|line| {
+                    let mut spans = vec![Span::styled("▎ ", Style::default().fg(FAINT))];
+                    spans.extend(styled(line, base));
+                    spans
+                })
+                .collect()
+        }
+        util::Block::Code(code) => {
+            let style = Style::default().fg(CODE_FG).bg(CODE_BG);
+            code.iter()
+                .map(|line| {
+                    let inner = width.saturating_sub(2);
+                    let text = truncate(line, inner);
+                    let pad = inner.saturating_sub(text.chars().count());
+                    let mut spans = vec![Span::styled(" ", style)];
+                    spans.extend(highlighted(&text, query, style));
+                    spans.push(Span::styled(" ".repeat(pad + 1), style));
+                    spans
+                })
+                .collect()
+        }
+    }
 }
 
 fn story_header_lines(app: &App, width: usize) -> Vec<Line<'static>> {
@@ -957,6 +1016,33 @@ mod tests {
         (0..h)
             .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect())
             .collect()
+    }
+
+    fn plain(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn code_blocks_keep_indentation_and_fill_the_width_without_wrapping() {
+        let html = "<pre><code>    fn work(io: std.Io) !void {\n        &#x2F;&#x2F; a comment far too long to fit\n    }</code></pre>";
+        let block = &util::blocks(html)[0];
+        let lines: Vec<String> = block_lines(block, 30, None)
+            .iter()
+            .map(|l| plain(l))
+            .collect();
+        assert_eq!(lines.len(), 3, "code never reflows");
+        assert!(lines.iter().all(|l| l.chars().count() == 30));
+        assert!(lines[1].starts_with("     // a comment"));
+    }
+
+    #[test]
+    fn quotes_get_a_bar_and_wrap_inside_it() {
+        let block = &util::blocks("&gt; one two three four five six")[0];
+        let lines: Vec<String> = block_lines(block, 14, None)
+            .iter()
+            .map(|l| plain(l))
+            .collect();
+        assert_eq!(lines, ["▎ one two", "▎ three four", "▎ five six"]);
     }
 
     #[test]

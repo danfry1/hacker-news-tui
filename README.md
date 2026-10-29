@@ -19,6 +19,7 @@ built with [Ratatui](https://ratatui.rs).
 - **Threaded comments** with colored depth guides, collapsible subtrees, and an
   `OP` badge so you can follow the original poster. `J` / `K` skip between
   top-level threads, and text is kept to a comfortable reading width.
+  Quotes, code blocks, italics and links keep their formatting.
 - **Async, non-blocking UI** — stories and whole comment trees are fetched
   concurrently in the background while the interface stays responsive, with a
   live loading spinner.

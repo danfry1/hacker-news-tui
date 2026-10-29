@@ -1133,6 +1133,7 @@ pub struct FlatComment {
     pub by: String,
     pub time: u64,
     pub text: String,
+    pub body: Vec<util::Block>,
     pub depth: usize,
     pub collapsed: bool,
     pub has_children: bool,
@@ -1157,6 +1158,11 @@ fn flatten(list: &[Comment], collapsed: &HashSet<u64>, depth: usize, out: &mut V
                 String::new()
             } else {
                 c.text.clone()
+            },
+            body: if is_collapsed {
+                Vec::new()
+            } else {
+                c.body.clone()
             },
             depth,
             collapsed: is_collapsed,

@@ -125,6 +125,189 @@ fn decode_one(entity: &str) -> Option<char> {
     }
 }
 
+/// A stretch of text in one style.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Run {
+    pub text: String,
+    pub italic: bool,
+    /// Link text (an `<a>`), which HN abbreviates for long URLs.
+    pub link: bool,
+}
+
+/// A block of a comment, as HN lays it out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Block {
+    Para(Vec<Run>),
+    /// A paragraph starting with `>`, HN's convention for quoting; the marker
+    /// is removed.
+    Quote(Vec<Run>),
+    /// A `<pre><code>` block, its lines kept as written minus their common
+    /// indentation.
+    Code(Vec<String>),
+}
+
+/// Parse HN's comment HTML into paragraphs, quotes and code blocks, keeping
+/// italics and link text. HN emits only `<p>`, `<i>`, `<a>` and `<pre><code>`;
+/// anything else is dropped like the plain-text path does.
+pub fn blocks(html: &str) -> Vec<Block> {
+    let mut out = Vec::new();
+    let mut para: Vec<Run> = Vec::new();
+    let mut code: Option<String> = None;
+    let (mut italic, mut link) = (false, false);
+    let mut rest = html;
+    while !rest.is_empty() {
+        let (text, after) = match rest.find('<') {
+            Some(lt) => (&rest[..lt], &rest[lt..]),
+            None => (rest, ""),
+        };
+        if !text.is_empty() {
+            let text = decode_entities(text);
+            match &mut code {
+                Some(c) => c.push_str(&text),
+                None => push_run(&mut para, text, italic, link),
+            }
+        }
+        if after.is_empty() {
+            break;
+        }
+        let Some(gt) = after.find('>') else {
+            break; // an unterminated tag: drop it, as the plain-text path does
+        };
+        let tag = after[1..gt].trim().to_ascii_lowercase();
+        rest = &after[gt + 1..];
+        let name = tag.split_whitespace().next().unwrap_or("");
+        match name {
+            "p" if code.is_none() => end_para(&mut out, &mut para),
+            "pre" => {
+                end_para(&mut out, &mut para);
+                code = Some(String::new());
+            }
+            "/pre" => {
+                if let Some(c) = code.take() {
+                    end_code(&mut out, &c);
+                }
+            }
+            "i" | "em" => italic = true,
+            "/i" | "/em" => italic = false,
+            "a" => link = true,
+            "/a" => link = false,
+            _ => {}
+        }
+    }
+    if let Some(c) = code {
+        end_code(&mut out, &c);
+    }
+    end_para(&mut out, &mut para);
+    out
+}
+
+/// Append text to a paragraph, merging it into the last run when the style
+/// matches. HN doesn't treat newlines outside code as breaks, so they become
+/// spaces.
+fn push_run(para: &mut Vec<Run>, text: String, italic: bool, link: bool) {
+    let text = text.replace('\n', " ");
+    match para.last_mut() {
+        Some(last) if last.italic == italic && last.link == link => last.text.push_str(&text),
+        _ => para.push(Run { text, italic, link }),
+    }
+}
+
+fn end_para(out: &mut Vec<Block>, para: &mut Vec<Run>) {
+    let mut runs = std::mem::take(para);
+    if runs.iter().all(|r| r.text.trim().is_empty()) {
+        return;
+    }
+    let quoted = runs
+        .first()
+        .is_some_and(|r| r.text.trim_start().starts_with('>'));
+    if quoted {
+        let first = &mut runs[0];
+        first.text = first
+            .text
+            .trim_start()
+            .trim_start_matches('>')
+            .trim_start()
+            .to_string();
+        out.push(Block::Quote(runs));
+    } else {
+        out.push(Block::Para(runs));
+    }
+}
+
+fn end_code(out: &mut Vec<Block>, code: &str) {
+    let lines: Vec<&str> = code.trim_matches('\n').lines().collect();
+    let indent = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    let lines: Vec<String> = lines
+        .iter()
+        .map(|l| l.get(indent..).unwrap_or("").trim_end().to_string())
+        .collect();
+    if !lines.iter().all(|l| l.is_empty()) {
+        out.push(Block::Code(lines));
+    }
+}
+
+/// Word-wrap styled runs to `width` columns. Words never split across runs:
+/// text glued to a neighbouring run (`<i>foo</i>bar`) wraps as one word.
+pub fn wrap_runs(runs: &[Run], width: usize) -> Vec<Vec<Run>> {
+    let width = width.max(8);
+    // Words, each a list of styled pieces.
+    let mut words: Vec<Vec<Run>> = Vec::new();
+    let mut glued = false;
+    for run in runs {
+        let starts_with_space = run.text.starts_with(char::is_whitespace);
+        for (i, piece) in run.text.split_whitespace().enumerate() {
+            let piece = Run {
+                text: piece.to_string(),
+                ..run.clone()
+            };
+            match words.last_mut() {
+                Some(word) if i == 0 && glued && !starts_with_space => word.push(piece),
+                _ => words.push(vec![piece]),
+            }
+        }
+        glued = !run.text.is_empty() && !run.text.ends_with(char::is_whitespace);
+    }
+
+    let mut lines: Vec<Vec<Run>> = Vec::new();
+    let mut line: Vec<Run> = Vec::new();
+    let mut line_len = 0;
+    for word in words {
+        let wlen: usize = word.iter().map(|p| p.text.chars().count()).sum();
+        if line_len > 0 && line_len + 1 + wlen > width {
+            lines.push(std::mem::take(&mut line));
+            line_len = 0;
+        }
+        if line_len > 0 {
+            push_text(&mut line, " ", word[0].italic, word[0].link);
+            line_len += 1;
+        }
+        for piece in word {
+            push_text(&mut line, &piece.text, piece.italic, piece.link);
+        }
+        line_len += wlen;
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn push_text(line: &mut Vec<Run>, text: &str, italic: bool, link: bool) {
+    match line.last_mut() {
+        Some(last) if last.italic == italic && last.link == link => last.text.push_str(text),
+        _ => line.push(Run {
+            text: text.to_string(),
+            italic,
+            link,
+        }),
+    }
+}
+
 /// Word-wrap `text` to `width` columns, preserving blank lines between paragraphs.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(8);
@@ -342,6 +525,74 @@ mod tests {
             ["https://example.com/a/very/long/path", "http://x.org"]
         );
         assert!(extract_links("no links here").is_empty());
+    }
+
+    fn run(text: &str) -> Run {
+        Run {
+            text: text.into(),
+            italic: false,
+            link: false,
+        }
+    }
+
+    #[test]
+    fn blocks_split_paragraphs_quotes_and_code() {
+        let html = "&gt; quoted <i>bit</i><p>reply with <a href=\"https://x.dev\">x.dev</a>\
+                    <p><pre><code>    fn main() {\n        x &amp;&amp; y\n    }\n</code></pre>after";
+        let b = blocks(html);
+        assert_eq!(b.len(), 4);
+        assert_eq!(
+            b[0],
+            Block::Quote(vec![
+                run("quoted "),
+                Run {
+                    italic: true,
+                    ..run("bit")
+                }
+            ])
+        );
+        assert_eq!(
+            b[1],
+            Block::Para(vec![
+                run("reply with "),
+                Run {
+                    link: true,
+                    ..run("x.dev")
+                }
+            ])
+        );
+        assert_eq!(
+            b[2],
+            Block::Code(vec!["fn main() {".into(), "    x && y".into(), "}".into()])
+        );
+        assert_eq!(b[3], Block::Para(vec![run("after")]));
+    }
+
+    #[test]
+    fn blocks_treat_newlines_outside_code_as_spaces_and_skip_empty_paragraphs() {
+        assert_eq!(
+            blocks("one\ntwo<p><p>  <p>three"),
+            [
+                Block::Para(vec![run("one two")]),
+                Block::Para(vec![run("three")])
+            ]
+        );
+        assert!(blocks("").is_empty());
+    }
+
+    #[test]
+    fn wrap_runs_keeps_styles_and_glued_words_together() {
+        let italic = |t: &str| Run {
+            italic: true,
+            ..run(t)
+        };
+        let runs = [run("aaaa bbbb "), italic("cc"), run("dd eeee")];
+        let lines = wrap_runs(&runs, 10);
+        // "ccdd" is one word, so it wraps whole.
+        assert_eq!(
+            lines,
+            [vec![run("aaaa bbbb")], vec![italic("cc"), run("dd eeee")]]
+        );
     }
 
     #[test]

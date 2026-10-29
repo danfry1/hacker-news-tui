@@ -39,6 +39,7 @@ fn leaf(id: u64) -> Comment {
         time: 0,
         text: "text".into(),
         links: vec![],
+        body: vec![],
         children: vec![],
     }
 }
