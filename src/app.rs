@@ -31,7 +31,8 @@ type Opener = Box<dyn Fn(&str) -> bool + Send>;
 const FIRST_PAGE: usize = 20;
 /// Stories materialized per batch when scrolling further down.
 const PAGE: usize = 30;
-/// Most comments fetched for one discussion, so huge threads stay responsive.
+/// Most comments fetched from Firebase for one discussion, so huge threads stay
+/// responsive when the whole thread can't come from Algolia in one request.
 const COMMENT_LIMIT: usize = 250;
 
 /// Messages sent from background fetch tasks back to the UI loop.
@@ -299,9 +300,10 @@ impl App {
         self.view = View::Comments;
 
         let (client, kids, tx) = (self.client.clone(), story.kids.clone(), self.tx.clone());
+        let id = story.id;
         self.story = Some(story);
         (self.spawn)(Box::pin(async move {
-            let (result, truncated) = api::fetch_comments(client, kids, COMMENT_LIMIT).await;
+            let (result, truncated) = api::fetch_thread(client, id, kids, COMMENT_LIMIT).await;
             let _ = tx.send(Msg::Comments {
                 seq,
                 result,

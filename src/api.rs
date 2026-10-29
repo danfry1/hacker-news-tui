@@ -1,12 +1,21 @@
-//! Hacker News Firebase API client.
+//! Hacker News API client: the official Firebase API for feeds and items, and
+//! Algolia's HN Search API for whole comment threads.
 
 use futures::future::{BoxFuture, FutureExt, join_all};
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::sync::Semaphore;
 
 pub const BASE: &str = "https://hacker-news.firebaseio.com/v0";
+/// Algolia's HN Search API, which serves a story's whole comment tree in one
+/// response. The Firebase API needs a request per comment.
+pub const ALGOLIA: &str = "https://hn.algolia.com/api/v1";
+/// How long to wait for a thread from Algolia before falling back to Firebase.
+/// Shorter than the client's own timeout, since a fallback follows.
+const ALGOLIA_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Cap on in-flight item requests. The HN Firebase API has no batch endpoint, so
 /// a feed page or a comment thread is many single-item fetches; bounding how many
@@ -124,6 +133,22 @@ pub struct Comment {
 }
 
 impl Comment {
+    /// Build a comment from its raw HTML, cleaning the text and collecting links.
+    fn new(id: u64, by: String, time: u64, html: &str, children: Vec<Comment>) -> Self {
+        Comment {
+            id,
+            by: if by.is_empty() {
+                "[unknown]".to_string()
+            } else {
+                by
+            },
+            time,
+            text: crate::util::clean_html(html),
+            links: crate::util::extract_links(html),
+            children,
+        }
+    }
+
     /// Total number of descendants (replies, recursively).
     pub fn descendant_count(&self) -> usize {
         self.children.len()
@@ -183,6 +208,100 @@ async fn fetch_item_limited(
 ) -> Result<Option<Item>, String> {
     let _permit = sem.acquire().await.ok();
     fetch_item(client, id).await
+}
+
+/// A node of an Algolia thread: the story itself or a comment under it.
+#[derive(Deserialize)]
+struct AlgoliaNode {
+    id: u64,
+    #[serde(default, rename = "type")]
+    kind: String,
+    /// `null` for deleted comments.
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    created_at_i: u64,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    children: Vec<AlgoliaNode>,
+}
+
+/// Convert Algolia nodes into comments. Deleted comments and anything that
+/// isn't a comment are dropped with their replies, as the Firebase path does.
+fn algolia_comments(nodes: Vec<AlgoliaNode>) -> Vec<Comment> {
+    nodes
+        .into_iter()
+        .filter(|n| n.kind == "comment")
+        .filter_map(|n| {
+            let by = n.author?;
+            let html = n.text.unwrap_or_default();
+            let children = algolia_comments(n.children);
+            Some(Comment::new(n.id, by, n.created_at_i, &html, children))
+        })
+        .collect()
+}
+
+async fn fetch_algolia(client: &Client, story: u64) -> Result<Vec<Comment>, String> {
+    let node = client
+        .get(format!("{ALGOLIA}/items/{story}"))
+        .timeout(ALGOLIA_TIMEOUT)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| e.to_string())?
+        .json::<AlgoliaNode>()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(algolia_comments(node.children))
+}
+
+/// Order top-level comments as Hacker News ranks them, which is the order of
+/// the story's `kids`. Algolia lists them by id instead. Comments that aren't
+/// in `kids` keep their relative order at the end.
+fn rank_top_level(kids: &[u64], comments: Vec<Comment>) -> Vec<Comment> {
+    let mut by_id: HashMap<u64, Comment> = HashMap::with_capacity(comments.len());
+    let mut unranked = Vec::new();
+    let ranked_ids: HashSet<u64> = kids.iter().copied().collect();
+    for c in comments {
+        if ranked_ids.contains(&c.id) {
+            by_id.insert(c.id, c);
+        } else {
+            unranked.push(c);
+        }
+    }
+    let mut ranked: Vec<Comment> = kids.iter().filter_map(|id| by_id.remove(id)).collect();
+    ranked.append(&mut unranked);
+    ranked
+}
+
+/// Fetch a story's whole comment thread. Algolia serves it in one request;
+/// top-level comments it hasn't indexed yet (its index trails new comments by
+/// a little) are fetched from Firebase. If Algolia is unavailable, the thread
+/// comes from Firebase alone, bounded to `max` comments. Also reports whether
+/// a bound cut the thread short.
+pub async fn fetch_thread(
+    client: Client,
+    story: u64,
+    kids: Vec<u64>,
+    max: usize,
+) -> (Vec<Comment>, bool) {
+    let Ok(mut comments) = fetch_algolia(&client, story).await else {
+        return fetch_comments(client, kids, max).await;
+    };
+    let indexed: HashSet<u64> = comments.iter().map(|c| c.id).collect();
+    let missing: Vec<u64> = kids
+        .iter()
+        .copied()
+        .filter(|id| !indexed.contains(id))
+        .collect();
+    let mut truncated = false;
+    if !missing.is_empty() {
+        let (mut extra, cut) = fetch_comments(client, missing, max).await;
+        comments.append(&mut extra);
+        truncated = cut;
+    }
+    (rank_top_level(&kids, comments), truncated)
 }
 
 /// Fetch a comment forest under `root_kids`, bounded to `max` total comments so
@@ -252,18 +371,7 @@ fn build_forest<'a>(
                 }
                 let children = build_forest(client, item.kids.clone(), depth + 1, limits).await;
                 let html = item.text.as_deref().unwrap_or("");
-                Some(Comment {
-                    id: item.id,
-                    by: if item.by.is_empty() {
-                        "[unknown]".to_string()
-                    } else {
-                        item.by
-                    },
-                    time: item.time,
-                    text: crate::util::clean_html(html),
-                    links: crate::util::extract_links(html),
-                    children,
-                })
+                Some(Comment::new(item.id, item.by, item.time, html, children))
             },
         ))
         .await;
@@ -350,6 +458,62 @@ mod tests {
         // children: 2,5 ; grandchildren: 3,4 → 4 descendants.
         assert_eq!(tree.descendant_count(), 4);
         assert_eq!(leaf(9).descendant_count(), 0);
+    }
+
+    fn node(json: &str) -> AlgoliaNode {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn algolia_thread_becomes_cleaned_comments() {
+        let story = node(
+            r#"{"id": 1, "type": "story", "author": "op", "children": [
+                {"id": 2, "type": "comment", "author": "a", "created_at_i": 100,
+                 "text": "<p>see <a href=\"https://x.dev/\">x</a> &amp; more",
+                 "children": [
+                    {"id": 3, "type": "comment", "author": "b", "text": "reply", "children": []}
+                 ]},
+                {"id": 4, "type": "comment", "author": null, "text": null, "children": [
+                    {"id": 5, "type": "comment", "author": "c", "text": "orphan", "children": []}
+                ]}
+            ]}"#,
+        );
+        let comments = algolia_comments(story.children);
+        assert_eq!(
+            comments.len(),
+            1,
+            "deleted comments are dropped with their replies"
+        );
+        let c = &comments[0];
+        assert_eq!((c.id, c.by.as_str(), c.time), (2, "a", 100));
+        assert_eq!(c.text, "see x & more");
+        assert_eq!(c.links, ["https://x.dev/"]);
+        assert_eq!(c.children[0].text, "reply");
+    }
+
+    #[test]
+    fn algolia_drops_non_comment_nodes() {
+        let story = node(
+            r#"{"id": 1, "children": [
+                {"id": 2, "type": "pollopt", "author": "a", "text": "option"},
+                {"id": 3, "type": "comment", "author": "b", "text": "hi"}
+            ]}"#,
+        );
+        let ids: Vec<u64> = algolia_comments(story.children)
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, [3]);
+    }
+
+    #[test]
+    fn top_level_comments_follow_hn_ranking() {
+        let leaf = |id| Comment::new(id, "x".into(), 0, "", vec![]);
+        // Algolia order is by id; HN ranks 30 first. 50 isn't in `kids`.
+        let comments = vec![leaf(10), leaf(20), leaf(30), leaf(50)];
+        let ranked = rank_top_level(&[30, 10, 40, 20], comments);
+        let ids: Vec<u64> = ranked.iter().map(|c| c.id).collect();
+        assert_eq!(ids, [30, 10, 20, 50]);
     }
 
     #[test]

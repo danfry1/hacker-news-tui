@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Discussions now load in full and much faster. The whole comment thread is
+  fetched from Algolia's HN Search API in one request instead of one request
+  per comment, so long threads are no longer cut off at 250 comments.
+  Top-level comments keep Hacker News's ranking, comments not yet indexed by
+  Algolia are fetched from the official API, and the official API is used on
+  its own if Algolia is unavailable.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added

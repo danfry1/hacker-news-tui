@@ -187,7 +187,7 @@ cargo audit
 | File | Responsibility |
 | --- | --- |
 | `src/main.rs` | Terminal setup and the async event loop (input · fetch results · tick) |
-| `src/api.rs` | Hacker News Firebase API client and data types |
+| `src/api.rs` | Hacker News API clients (Firebase, Algolia) and data types |
 | `src/app.rs` | Application state, input handling, async orchestration |
 | `src/app/tests.rs` | State-machine tests for `App`, driven without I/O |
 | `src/color.rs` | Adapts rendered frames to 256-colour or `NO_COLOR` terminals |
@@ -213,5 +213,10 @@ errors), the test suite, and `cargo audit` on every push and pull request.
 
 ## Data source
 
-Uses the official [Hacker News API](https://github.com/HackerNews/API). No API
-key required.
+Feeds and stories come from the official
+[Hacker News API](https://github.com/HackerNews/API). Comment threads come from
+[Algolia's HN Search API](https://hn.algolia.com/api), which returns a whole
+thread in one request, so even very long discussions load in full. Comments
+too new for Algolia's index are filled in from the official API, and if
+Algolia can't be reached the thread is loaded from the official API alone
+(limited to the first 250 comments). Neither needs an API key.
