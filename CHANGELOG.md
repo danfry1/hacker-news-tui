@@ -15,6 +15,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A calmer story list. Rank numbers are grey, so orange marks only scores and
+  the selection. The meta line reads score, comments, age, then author, which
+  is the order people weigh a story in. "240 comments" replaces the 💬 emoji,
+  which rendered at varying widths, and stories with no comments show no count.
 - Comments are kept to a comfortable reading width (92 columns) on wide
   terminals, instead of running the full width of the screen.
 - Discussions now load in full and much faster. The whole comment thread is

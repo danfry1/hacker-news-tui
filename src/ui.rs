@@ -239,7 +239,7 @@ fn story_row(
 
     let mut title_spans = vec![Span::styled(
         format!("{:>w$}. ", i + 1, w = cols.num),
-        Style::default().fg(ORANGE),
+        Style::default().fg(DIM),
     )];
     if saved {
         title_spans.push(Span::styled("★ ", Style::default().fg(ORANGE)));
@@ -261,21 +261,40 @@ fn story_row(
         title_spans.push(Span::styled(")", Style::default().fg(FAINT)));
     }
 
-    let meta = Line::from(vec![
-        Span::raw(" ".repeat(cols.num + 2)),
-        Span::styled(format!("▲ {}", story.score), Style::default().fg(ORANGE)),
-        Span::styled(format!("  by {}", story.by), Style::default().fg(DIM)),
-        Span::styled(
-            format!("  · {}", util::time_ago(story.time)),
-            Style::default().fg(DIM),
-        ),
-        Span::styled(
-            format!("  · 💬 {}", story.comment_count()),
-            Style::default().fg(ACCENT),
-        ),
-    ]);
+    let mut meta = vec![Span::raw(" ".repeat(cols.num + 2))];
+    meta.extend(story_meta(story));
 
-    ListItem::new(Text::from(vec![Line::from(title_spans), meta]))
+    ListItem::new(Text::from(vec![Line::from(title_spans), Line::from(meta)]))
+}
+
+/// A story's score, comments, age and author, in the order people weigh them
+/// when choosing what to read. A story without comments shows no count.
+fn story_meta(story: &Item) -> Vec<Span<'static>> {
+    let sep = || Span::styled(" · ", Style::default().fg(FAINT));
+    let mut spans = vec![Span::styled(
+        format!("▲ {}", story.score),
+        Style::default().fg(ORANGE),
+    )];
+    let comments = story.comment_count();
+    if comments > 0 {
+        let label = if comments == 1 { "comment" } else { "comments" };
+        spans.push(sep());
+        spans.push(Span::styled(
+            format!("{comments} {label}"),
+            Style::default().fg(ACCENT),
+        ));
+    }
+    spans.push(sep());
+    spans.push(Span::styled(
+        util::time_ago(story.time),
+        Style::default().fg(DIM),
+    ));
+    spans.push(sep());
+    spans.push(Span::styled(
+        format!("by {}", story.by),
+        Style::default().fg(DIM),
+    ));
+    spans
 }
 
 /// Give the selected row its background as the item's own base style. The
@@ -459,21 +478,10 @@ fn story_header_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled(wl, title_style)));
     }
 
-    let mut meta = vec![
-        Span::styled(format!("▲ {}", story.score), Style::default().fg(ORANGE)),
-        Span::styled(format!("  by {}", story.by), Style::default().fg(DIM)),
-        Span::styled(
-            format!("  · {}", util::time_ago(story.time)),
-            Style::default().fg(DIM),
-        ),
-        Span::styled(
-            format!("  · 💬 {}", story.comment_count()),
-            Style::default().fg(ACCENT),
-        ),
-    ];
+    let mut meta = story_meta(story);
     if let Some(dom) = story.url.as_deref().and_then(util::domain) {
         meta.push(Span::styled(
-            format!("  · {dom}"),
+            format!(" · {dom}"),
             Style::default().fg(FAINT),
         ));
     }
