@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Comments keep their formatting. Quoted lines (`> …`) show behind a bar in
+  grey italics, code blocks keep their indentation on a tinted background
+  without reflowing, and italics and link text are styled.
 - The Top feed marks the end of the front page, after its 30th story, as a
   natural place to stop. Scrolling continues below it. The end of a feed
   says so ("that's all 500 stories").
